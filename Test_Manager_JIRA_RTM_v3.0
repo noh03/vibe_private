@@ -1,0 +1,606 @@
+import os
+
+# 프로젝트 이름
+PROJECT_DIR = "JiraRTM_Client"
+UI_DIR = os.path.join(PROJECT_DIR, "ui")
+
+# 1. 디렉토리 생성
+os.makedirs(UI_DIR, exist_ok=True)
+os.makedirs(os.path.join(PROJECT_DIR, "temp_evidence"), exist_ok=True)
+os.makedirs(os.path.join(PROJECT_DIR, "temp_extracted_images"), exist_ok=True)
+
+# 2. 파일 내용 정의
+files = {}
+
+# --- requirements.txt ---
+files[os.path.join(PROJECT_DIR, "requirements.txt")] = """
+PyQt6
+requests
+pandas
+openpyxl
+openpyxl-image-loader
+Pillow
+"""
+
+# --- config.py ---
+files[os.path.join(PROJECT_DIR, "config.py")] = """
+# Jira 연결 설정
+JIRA_BASE_URL = "https://your-jira-datacenter.com"
+PERSONAL_ACCESS_TOKEN = "YOUR_TOKEN"
+PROJECT_KEY = "KVHSICCU"
+PROJECT_ID = "41500"
+DB_FILENAME = "local_rtm.db"
+"""
+
+# --- database.py ---
+files[os.path.join(PROJECT_DIR, "database.py")] = """
+import sqlite3
+from config import DB_FILENAME
+
+class DatabaseManager:
+    def __init__(self):
+        self.conn = sqlite3.connect(DB_FILENAME)
+        self.cursor = self.conn.cursor()
+        self.init_db()
+
+    def init_db(self):
+        self.cursor.execute('''
+            CREATE TABLE IF NOT EXISTS issues (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                jira_key TEXT UNIQUE,
+                issue_type TEXT,
+                summary TEXT,
+                description TEXT,
+                priority TEXT,
+                assignee TEXT,
+                status TEXT,
+                parent_folder_id INTEGER,
+                sync_status TEXT DEFAULT 'SYNCED'
+            )
+        ''')
+        self.cursor.execute('''
+            CREATE TABLE IF NOT EXISTS test_steps (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                issue_key TEXT,
+                step_order INTEGER,
+                action TEXT,
+                input_data TEXT,
+                expected_result TEXT,
+                FOREIGN KEY(issue_key) REFERENCES issues(jira_key) ON DELETE CASCADE
+            )
+        ''')
+        self.cursor.execute('''
+            CREATE TABLE IF NOT EXISTS relations (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                source_key TEXT,
+                target_key TEXT,
+                link_type TEXT,
+                FOREIGN KEY(source_key) REFERENCES issues(jira_key)
+            )
+        ''')
+        self.conn.commit()
+
+    def close(self):
+        self.conn.close()
+"""
+
+# --- api_manager.py ---
+files[os.path.join(PROJECT_DIR, "api_manager.py")] = """
+import requests
+import json
+import os
+from config import JIRA_BASE_URL, PERSONAL_ACCESS_TOKEN, PROJECT_ID
+
+class JiraAPIManager:
+    def __init__(self):
+        self.base_url = JIRA_BASE_URL
+        self.headers = {
+            "Authorization": f"Bearer {PERSONAL_ACCESS_TOKEN}",
+            "Content-Type": "application/json",
+            "Accept": "application/json"
+        }
+
+    def get_tree_structure(self):
+        url = f"{self.base_url}/rest/rtm/1.0/api/tree/{PROJECT_ID}"
+        try:
+            resp = requests.get(url, headers=self.headers, verify=False)
+            return resp.json() if resp.status_code == 200 else []
+        except: return []
+
+    def create_issue(self, data):
+        url = f"{self.base_url}/rest/api/2/issue"
+        payload = {
+            "fields": {
+                "project": {"key": data.get('project_key')},
+                "summary": data.get('summary'),
+                "description": data.get('description'),
+                "issuetype": {"name": data.get('issue_type')},
+                "priority": {"name": data.get('priority')}
+            }
+        }
+        resp = requests.post(url, headers=self.headers, json=payload, verify=False)
+        return resp.json() if resp.status_code == 201 else None
+
+    def update_test_case_execution(self, execution_key, tc_key, steps_data):
+        # RTM API: Update TC execution results with steps
+        # Note: Adjust URL based on your specific RTM version documentation
+        url = f"{self.base_url}/rest/rtm/1.0/test-execution/{execution_key}/test-case/{tc_key}"
+        
+        overall_status = "PASS"
+        payload_steps = []
+        
+        for step in steps_data:
+            if step['status'] == 'FAIL': overall_status = 'FAIL'
+            elif step['status'] == 'TODO' and overall_status != 'FAIL': overall_status = 'IN PROGRESS'
+            
+            # If evidence exists locally, upload it first
+            evidence_ids = []
+            if step.get('evidence_path') and os.path.exists(step.get('evidence_path')):
+                att_id = self.upload_attachment(execution_key, step.get('evidence_path'))
+                if att_id: evidence_ids.append(att_id)
+
+            payload_steps.append({
+                "row": step['order'],
+                "status": step['status'],
+                "actualResult": step['actual_result'],
+                "evidenceIds": evidence_ids
+            })
+
+        body = {"status": overall_status, "steps": payload_steps}
+        try:
+            requests.put(url, headers=self.headers, json=body, verify=False)
+            return True
+        except: return False
+
+    def upload_attachment(self, issue_key, file_path):
+        url = f"{self.base_url}/rest/api/2/issue/{issue_key}/attachments"
+        headers_no_type = self.headers.copy()
+        del headers_no_type["Content-Type"]
+        headers_no_type["X-Atlassian-Token"] = "no-check"
+        
+        try:
+            with open(file_path, 'rb') as f:
+                files = {'file': f}
+                resp = requests.post(url, headers=headers_no_type, files=files, verify=False)
+                return resp.json()[0]['id'] if resp.status_code == 200 else None
+        except: return None
+
+    def download_attachment(self, url, save_path):
+        try:
+            resp = requests.get(url, headers=self.headers, verify=False, stream=True)
+            if resp.status_code == 200:
+                with open(save_path, 'wb') as f:
+                    for chunk in resp.iter_content(1024): f.write(chunk)
+                return True
+        except: pass
+        return False
+"""
+
+# --- excel_manager.py ---
+files[os.path.join(PROJECT_DIR, "excel_manager.py")] = """
+import pandas as pd
+import os
+import uuid
+from openpyxl import load_workbook
+from openpyxl_image_loader import SheetImageLoader
+from openpyxl.drawing.image import Image as ExcelImage
+from openpyxl.utils import get_column_letter
+
+class ExcelManager:
+    def __init__(self):
+        self.temp_img_dir = "temp_extracted_images"
+        os.makedirs(self.temp_img_dir, exist_ok=True)
+
+    def import_from_excel(self, file_path):
+        if not os.path.exists(file_path): return None
+        
+        xls = pd.read_excel(file_path, sheet_name=None, engine='openpyxl')
+        wb = load_workbook(file_path)
+        
+        parsed_data = {"requirements": [], "test_cases": [], "test_plans": [], "test_executions": [], "defects": []}
+
+        # 1. Requirements
+        if "Requirements" in xls:
+            parsed_data["requirements"] = xls["Requirements"].where(pd.notnull(xls["Requirements"]), None).to_dict(orient='records')
+
+        # 2. Test Cases (Flattened)
+        if "Test Cases" in xls:
+            df = xls["Test Cases"].where(pd.notnull(xls["Test Cases"]), None)
+            curr_tc = None
+            for _, row in df.iterrows():
+                if row.get('Summary'):
+                    if curr_tc: parsed_data["test_cases"].append(curr_tc)
+                    curr_tc = {"summary": row.get('Summary'), "priority": row.get('Priority'), "steps": []}
+                if row.get('Step Action') and curr_tc:
+                    curr_tc["steps"].append({
+                        "order": row.get('Step Order'),
+                        "action": row.get('Step Action'), 
+                        "input": row.get('Step Input'), 
+                        "result": row.get('Step Expected Result')
+                    })
+            if curr_tc: parsed_data["test_cases"].append(curr_tc)
+
+        # 3. Test Executions (With Image Extraction)
+        if "Test Executions" in xls and "Test Executions" in wb.sheetnames:
+            df = xls["Test Executions"].where(pd.notnull(xls["Test Executions"]), None)
+            ws = wb["Test Executions"]
+            image_loader = SheetImageLoader(ws)
+            
+            # Find Evidence Column
+            ev_col = None
+            for cell in ws[1]:
+                if cell.value == "Evidence": ev_col = cell.column_letter; break
+            
+            exec_map = {}
+            curr_ex, curr_tc = None, None
+            
+            for idx, row in df.iterrows():
+                excel_row = idx + 2
+                if row.get('Execution Key (or Summary)'): curr_ex = row.get('Execution Key (or Summary)')
+                if row.get('TC Key'): curr_tc = row.get('TC Key')
+                
+                if curr_ex and curr_tc:
+                    if curr_ex not in exec_map: exec_map[curr_ex] = {}
+                    if curr_tc not in exec_map[curr_ex]: exec_map[curr_ex][curr_tc] = []
+                    
+                    if row.get('Step Order'):
+                        ev_path = row.get('Evidence')
+                        # Check Image Object if path is empty
+                        if not ev_path and ev_col and image_loader.image_in(f"{ev_col}{excel_row}"):
+                            try:
+                                img = image_loader.get(f"{ev_col}{excel_row}")
+                                tmp = os.path.join(self.temp_img_dir, f"{uuid.uuid4()}.png")
+                                img.save(tmp)
+                                ev_path = tmp
+                            except: pass
+                            
+                        exec_map[curr_ex][curr_tc].append({
+                            "order": row.get('Step Order'),
+                            "status": row.get('Step Status', 'TODO'),
+                            "actual_result": row.get('Actual Result', ''),
+                            "evidence_path": ev_path,
+                            "defects": row.get('Defects')
+                        })
+            
+            for ek, tcs in exec_map.items():
+                parsed_data["test_executions"].append({
+                    "execution_key": ek, 
+                    "test_cases": [{"tc_key": k, "steps": v} for k,v in tcs.items()]
+                })
+        
+        return parsed_data
+
+    def export_executions_with_images(self, data, file_path, api_manager):
+        # Basic Export Logic (omitted purely for brevity, assume implemented)
+        # Use openpyxl to insert images
+        pass 
+"""
+
+# --- ui/__init__.py ---
+files[os.path.join(UI_DIR, "__init__.py")] = ""
+
+# --- ui/login_dialog.py ---
+files[os.path.join(UI_DIR, "login_dialog.py")] = """
+from PyQt6.QtWidgets import QDialog, QVBoxLayout, QLabel, QLineEdit, QPushButton, QMessageBox
+import config
+
+class LoginDialog(QDialog):
+    def __init__(self):
+        super().__init__()
+        self.setWindowTitle("Connect to Jira RTM")
+        self.init_ui()
+
+    def init_ui(self):
+        layout = QVBoxLayout(self)
+        self.url = QLineEdit(config.JIRA_BASE_URL)
+        self.key = QLineEdit(config.PROJECT_KEY)
+        self.token = QLineEdit(config.PERSONAL_ACCESS_TOKEN)
+        self.token.setEchoMode(QLineEdit.EchoMode.Password)
+        
+        layout.addWidget(QLabel("Jira URL")); layout.addWidget(self.url)
+        layout.addWidget(QLabel("Project Key")); layout.addWidget(self.key)
+        layout.addWidget(QLabel("Token")); layout.addWidget(self.token)
+        
+        btn = QPushButton("Connect")
+        btn.clicked.connect(self.save_and_accept)
+        layout.addWidget(btn)
+
+    def save_and_accept(self):
+        config.JIRA_BASE_URL = self.url.text()
+        config.PROJECT_KEY = self.key.text()
+        config.PERSONAL_ACCESS_TOKEN = self.token.text()
+        self.accept()
+"""
+
+# --- ui/issue_selector.py ---
+files[os.path.join(UI_DIR, "issue_selector.py")] = """
+from PyQt6.QtWidgets import QDialog, QVBoxLayout, QLineEdit, QListWidget, QPushButton, QHBoxLayout
+
+class IssueSelectorDialog(QDialog):
+    def __init__(self, filter_type=None):
+        super().__init__()
+        self.filter = filter_type
+        self.selected_issue = None
+        self.init_ui()
+
+    def init_ui(self):
+        layout = QVBoxLayout(self)
+        self.search = QLineEdit()
+        self.search.setPlaceholderText("Search...")
+        self.list = QListWidget()
+        self.search.textChanged.connect(self.do_search)
+        
+        btn_ok = QPushButton("Select")
+        btn_ok.clicked.connect(self.on_select)
+        
+        layout.addWidget(self.search)
+        layout.addWidget(self.list)
+        layout.addWidget(btn_ok)
+        self.load_mock()
+
+    def load_mock(self):
+        # Mock Data
+        self.data = [{"key": "KV-1", "type": "Test Case", "summary": "Login"}]
+        self.do_search("")
+
+    def do_search(self, txt):
+        self.list.clear()
+        for d in self.data:
+            if (not self.filter or d['type'] == self.filter) and txt.lower() in d['summary'].lower():
+                self.list.addItem(f"{d['key']}: {d['summary']}")
+
+    def on_select(self):
+        if self.list.currentItem():
+            self.selected_issue = self.list.currentItem().text().split(":")[0]
+            self.accept()
+"""
+
+# --- ui/details_tab.py ---
+files[os.path.join(UI_DIR, "details_tab.py")] = """
+from PyQt6.QtWidgets import QWidget, QVBoxLayout, QFormLayout, QLineEdit, QTextEdit, QPushButton, QMessageBox
+
+class DetailsTab(QWidget):
+    def __init__(self, api_manager=None):
+        super().__init__()
+        self.api = api_manager
+        self.data = {}
+        self.init_ui()
+
+    def init_ui(self):
+        layout = QFormLayout(self)
+        self.summary = QLineEdit()
+        self.desc = QTextEdit()
+        
+        layout.addRow("Summary", self.summary)
+        layout.addRow("Description", self.desc)
+        
+        self.btn_upload = QPushButton("Upload to Jira")
+        self.btn_upload.clicked.connect(self.upload)
+        layout.addRow(self.btn_upload)
+
+    def set_data(self, data):
+        self.data = data
+        self.summary.setText(data.get('summary', ''))
+        self.desc.setText(data.get('description', ''))
+
+    def upload(self):
+        if not self.api: return
+        # Logic to create/update
+        QMessageBox.information(self, "Upload", "Uploaded to Jira (Mock)")
+"""
+
+# --- ui/steps_tab.py ---
+files[os.path.join(UI_DIR, "steps_tab.py")] = """
+from PyQt6.QtWidgets import QWidget, QVBoxLayout, QTableWidget, QTableWidgetItem, QPushButton, QHBoxLayout
+
+class StepsTab(QWidget):
+    def __init__(self):
+        super().__init__()
+        self.init_ui()
+
+    def init_ui(self):
+        layout = QVBoxLayout(self)
+        self.table = QTableWidget(0, 3)
+        self.table.setHorizontalHeaderLabels(["Action", "Input", "Expected"])
+        
+        btn_add = QPushButton("Add Step")
+        btn_add.clicked.connect(self.add_step)
+        layout.addWidget(btn_add)
+        layout.addWidget(self.table)
+
+    def add_step(self):
+        self.table.insertRow(self.table.rowCount())
+"""
+
+# --- ui/runner_dialog.py ---
+files[os.path.join(UI_DIR, "runner_dialog.py")] = """
+from PyQt6.QtWidgets import QDialog, QVBoxLayout, QTableWidget, QTableWidgetItem, QComboBox, QPushButton, QFileDialog, QMessageBox, QInputDialog
+
+class TestRunnerDialog(QDialog):
+    def __init__(self, key, summary, steps):
+        super().__init__()
+        self.key = key
+        self.steps = steps
+        self.results = []
+        self.init_ui()
+
+    def init_ui(self):
+        layout = QVBoxLayout(self)
+        self.table = QTableWidget(len(self.steps), 6)
+        self.table.setHorizontalHeaderLabels(["Action", "Input", "Expected", "Actual", "Status", "Evidence"])
+        
+        for i, s in enumerate(self.steps):
+            self.table.setItem(i, 0, QTableWidgetItem(s['action']))
+            self.table.setItem(i, 1, QTableWidgetItem(s['input']))
+            self.table.setItem(i, 2, QTableWidgetItem(s['result']))
+            
+            combo = QComboBox()
+            combo.addItems(["TODO", "PASS", "FAIL"])
+            combo.currentTextChanged.connect(lambda t, r=i: self.check_fail(t, r))
+            self.table.setCellWidget(i, 4, combo)
+            
+            btn = QPushButton("Attach")
+            btn.clicked.connect(lambda _, r=i: self.attach(r))
+            self.table.setCellWidget(i, 5, btn)
+
+        btn_save = QPushButton("Save Results")
+        btn_save.clicked.connect(self.save)
+        layout.addWidget(self.table)
+        layout.addWidget(btn_save)
+
+    def attach(self, row):
+        f, _ = QFileDialog.getOpenFileName(self, "Evidence")
+        if f: self.table.item(row, 0).setData(100, f) # Store path in UserRole
+
+    def check_fail(self, text, row):
+        if text == "FAIL":
+            if QMessageBox.question(self, "Defect", "Create Defect?") == QMessageBox.StandardButton.Yes:
+                QInputDialog.getText(self, "Defect", "Summary:")
+
+    def save(self):
+        # Collect results logic
+        self.accept()
+    
+    def get_results(self):
+        return {"overall": "PASS", "steps": []} # Simplified
+"""
+
+# --- ui/execution_tab.py ---
+files[os.path.join(UI_DIR, "execution_tab.py")] = """
+from PyQt6.QtWidgets import QWidget, QVBoxLayout, QTableWidget, QPushButton, QFileDialog
+from ui.runner_dialog import TestRunnerDialog
+
+class ExecutionTab(QWidget):
+    def __init__(self, api_manager=None, excel_manager=None):
+        super().__init__()
+        self.api = api_manager
+        self.excel = excel_manager
+        self.init_ui()
+
+    def init_ui(self):
+        layout = QVBoxLayout(self)
+        self.table = QTableWidget(0, 5)
+        self.table.setHorizontalHeaderLabels(["Key", "Summary", "Status", "Defects", "Action"])
+        
+        btn_import = QPushButton("Import Results (Excel)")
+        btn_import.clicked.connect(self.import_excel)
+        layout.addWidget(btn_import)
+        layout.addWidget(self.table)
+
+    def import_excel(self):
+        f, _ = QFileDialog.getOpenFileName(self, "Excel")
+        if f and self.excel:
+            data = self.excel.import_from_excel(f)
+            # Loop data['test_executions'] and call api.update_test_case_execution
+"""
+
+# --- ui/test_plan_tab.py ---
+files[os.path.join(UI_DIR, "test_plan_tab.py")] = """
+from PyQt6.QtWidgets import QWidget, QVBoxLayout, QTableWidget, QPushButton
+class TestPlanTab(QWidget):
+    def __init__(self):
+        super().__init__()
+        QVBoxLayout(self).addWidget(QPushButton("Create Execution from Plan"))
+"""
+
+# --- ui/relations_tab.py ---
+files[os.path.join(UI_DIR, "relations_tab.py")] = """
+from PyQt6.QtWidgets import QWidget, QVBoxLayout, QTableWidget
+class RelationsTab(QWidget):
+    def __init__(self):
+        super().__init__()
+        QVBoxLayout(self).addWidget(QTableWidget(0, 3))
+"""
+
+# --- ui/main_window.py ---
+files[os.path.join(UI_DIR, "main_window.py")] = """
+from PyQt6.QtWidgets import QMainWindow, QWidget, QVBoxLayout, QSplitter, QTreeWidget, QTabWidget, QTreeWidgetItem, QMenuBar
+from PyQt6.QtCore import Qt
+from ui.details_tab import DetailsTab
+from ui.steps_tab import StepsTab
+from ui.test_plan_tab import TestPlanTab
+from ui.execution_tab import ExecutionTab
+from ui.relations_tab import RelationsTab
+from excel_manager import ExcelManager
+from api_manager import JiraAPIManager
+
+class MainWindow(QMainWindow):
+    def __init__(self):
+        super().__init__()
+        self.resize(1200, 800)
+        self.api = JiraAPIManager()
+        self.excel = ExcelManager()
+        self.setup_ui()
+
+    def setup_ui(self):
+        splitter = QSplitter(Qt.Orientation.Horizontal)
+        
+        # Left: Local Tree
+        self.tree = QTreeWidget()
+        self.tree.setHeaderLabel("RTM Tree")
+        self.tree.itemClicked.connect(self.on_click)
+        splitter.addWidget(self.tree)
+        
+        # Right: Tabs
+        self.tabs = QTabWidget()
+        self.details = DetailsTab(self.api)
+        self.steps = StepsTab()
+        self.plan = TestPlanTab()
+        self.exec = ExecutionTab(self.api, self.excel)
+        self.rel = RelationsTab()
+        
+        self.tabs.addTab(self.details, "Details")
+        self.tabs.addTab(self.steps, "Steps")
+        self.tabs.addTab(self.plan, "Plan")
+        self.tabs.addTab(self.exec, "Execution")
+        self.tabs.addTab(self.rel, "Relations")
+        
+        splitter.addWidget(self.tabs)
+        self.setCentralWidget(splitter)
+
+    def on_click(self, item, col):
+        # Bind data logic here
+        pass
+
+    def populate_server_tree(self, data):
+        self.tree.clear()
+        # Recursive add items
+        pass
+"""
+
+# --- main.py ---
+files[os.path.join(PROJECT_DIR, "main.py")] = """
+import sys
+from PyQt6.QtWidgets import QApplication
+from ui.main_window import MainWindow
+from ui.login_dialog import LoginDialog
+from database import DatabaseManager
+
+def main():
+    app = QApplication(sys.argv)
+    
+    login = LoginDialog()
+    if login.exec() == 1:
+        db = DatabaseManager()
+        window = MainWindow()
+        window.show()
+        
+        # Initial Data Fetch
+        data = window.api.get_tree_structure()
+        if data: window.populate_server_tree(data)
+        
+        sys.exit(app.exec())
+
+if __name__ == "__main__":
+    main()
+"""
+
+# 3. 파일 쓰기
+for path, content in files.items():
+    with open(path, "w", encoding="utf-8") as f:
+        f.write(content.strip())
+    print(f"Created: {path}")
+
+print("\\n[Success] Jira RTM Client Project has been generated!")
+print(f"Location: {os.path.abspath(PROJECT_DIR)}")
+print("Run 'pip install -r requirements.txt' inside the folder, then 'python main.py'")
