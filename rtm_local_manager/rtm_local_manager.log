@@ -392,3 +392,9 @@ FileNotFoundError: [Errno 2] No such file or directory: 'jira_config.json'
 2025-11-28 02:50:37 [DEBUG] rtm.backend.jira_api - JIRA request GET https://your-jira-server.example.com/rest/rtm/1.0/api/tree/41500 kwargs={}
 2025-11-28 02:50:38 [DEBUG] rtm.backend.jira_api - JIRA request GET https://your-jira-server.example.com/rest/rtm/1.0/api/tree/41500 kwargs={}
 2025-11-28 02:50:39 [DEBUG] rtm.backend.jira_api - JIRA request GET https://your-jira-server.example.com/rest/rtm/1.0/api/tree/41500 kwargs={}
+2025-11-28 02:53:55 [INFO] rtm.gui.main_window - MainWindow init: db_path=rtm_local.db, config_path=jira_config.json
+2025-11-28 02:53:55 [DEBUG] rtm.gui.main_window - Local tree_view selectionModel is None at _connect_signals; will be connected after model set.
+2025-11-28 02:54:03 [DEBUG] rtm.backend.jira_api - JIRA request GET https://your-jira-server.example.com/rest/rtm/1.0/api/tree/41500 kwargs={}
+2025-11-28 02:57:25 [INFO] rtm.gui.main_window - MainWindow init: db_path=rtm_local.db, config_path=jira_config.json
+2025-11-28 02:57:25 [DEBUG] rtm.gui.main_window - Local tree_view selectionModel is None at _connect_signals; will be connected after model set.
+2025-11-28 02:57:27 [DEBUG] rtm.backend.jira_api - JIRA request GET https://your-jira-server.example.com/rest/rtm/1.0/api/tree/41500 kwargs={}

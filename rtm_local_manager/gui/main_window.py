@@ -235,7 +235,7 @@ class IssueTabWidget(QTabWidget):
     # --------------------------- Steps UI helpers ---------------------------
 
     def _current_group_no(self) -> int:
-        """현재 선택된 행의 group_no, 없으면 새 그룹 번호를 돌려준다."""
+        """현재 선택된 행의 group_no, 없으면 마지막 그룹 번호(또는 1)를 돌려준다."""
         row = self.steps_table.currentRow()
         if row >= 0:
             item = self.steps_table.item(row, 0)
@@ -244,7 +244,22 @@ class IssueTabWidget(QTabWidget):
                     return int(item.text())
                 except ValueError:
                     pass
-        # 선택이 없으면 max(group)+1
+        # 선택이 없으면 현재 테이블에서 가장 큰 group_no 를 사용 (없으면 1)
+        max_group = 0
+        for r in range(self.steps_table.rowCount()):
+            it = self.steps_table.item(r, 0)
+            if not it or not it.text().strip():
+                continue
+            try:
+                g = int(it.text())
+                if g > max_group:
+                    max_group = g
+            except ValueError:
+                continue
+        return max_group if max_group > 0 else 1
+
+    def _next_group_no(self) -> int:
+        """새 그룹을 만들 때 사용할 group_no (현재 최대값 + 1, 없으면 1)."""
         max_group = 0
         for r in range(self.steps_table.rowCount()):
             it = self.steps_table.item(r, 0)
@@ -280,11 +295,12 @@ class IssueTabWidget(QTabWidget):
 
     def _on_add_group_clicked(self):
         """새 그룹을 추가하고 첫 스텝 한 줄을 만든다."""
-        new_group = self._current_group_no()
-        row = self.steps_table.rowCount()
-        self.steps_table.insertRow(row)
         from PySide6.QtWidgets import QTableWidgetItem
 
+        # 항상 새로운 그룹 번호 사용
+        new_group = self._next_group_no()
+        row = self.steps_table.rowCount()
+        self.steps_table.insertRow(row)
         self.steps_table.setItem(row, 0, QTableWidgetItem(str(new_group)))
         self.steps_table.setItem(row, 1, QTableWidgetItem("1"))
         self._renumber_orders_per_group()
