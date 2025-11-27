@@ -183,42 +183,154 @@ class IssueTabWidget(QTabWidget):
     # ------------------------------------------------------------------ Other tabs (wireframe for now)
 
     def _init_steps_tab(self):
-        from PySide6.QtWidgets import QVBoxLayout, QHBoxLayout, QPushButton, QTableWidget, QTableWidgetItem, QLabel
+        from PySide6.QtWidgets import (
+            QVBoxLayout,
+            QHBoxLayout,
+            QPushButton,
+            QTableWidget,
+            QTableWidgetItem,
+            QLabel,
+            QTextEdit,
+        )
 
         layout = QVBoxLayout()
 
         # 상단 설명
-        layout.addWidget(QLabel("Test Case Steps (Order, Action, Input, Expected)"))
+        layout.addWidget(QLabel("Preconditions & Test Case Steps (Group, Order, Action, Input, Expected)"))
 
-        # 버튼 영역
+        # Preconditions 입력 영역
+        layout.addWidget(QLabel("Preconditions"))
+        self.txt_preconditions = QTextEdit()
+        self.txt_preconditions.setPlaceholderText("Enter preconditions for this test case...")
+        layout.addWidget(self.txt_preconditions)
+
+        # 버튼 영역 (그룹/스텝 추가/삭제)
         btn_layout = QHBoxLayout()
+        self.btn_add_group = QPushButton("Add Group")
+        self.btn_delete_group = QPushButton("Delete Selected Group")
         self.btn_add_step = QPushButton("Add Step")
         self.btn_delete_step = QPushButton("Delete Selected Step")
+        btn_layout.addWidget(self.btn_add_group)
+        btn_layout.addWidget(self.btn_delete_group)
         btn_layout.addWidget(self.btn_add_step)
         btn_layout.addWidget(self.btn_delete_step)
         btn_layout.addStretch()
         layout.addLayout(btn_layout)
 
-        # 테이블
+        # 테이블: Group / Order / Action / Input / Expected
         self.steps_table = QTableWidget()
-        self.steps_table.setColumnCount(4)
-        self.steps_table.setHorizontalHeaderLabels(["Order", "Action", "Input", "Expected"])
+        self.steps_table.setColumnCount(5)
+        self.steps_table.setHorizontalHeaderLabels(["Group", "Order", "Action", "Input", "Expected"])
         self.steps_table.horizontalHeader().setStretchLastSection(True)
         layout.addWidget(self.steps_table)
 
         # 시그널
+        self.btn_add_group.clicked.connect(self._on_add_group_clicked)
+        self.btn_delete_group.clicked.connect(self._on_delete_group_clicked)
         self.btn_add_step.clicked.connect(self._on_add_step_clicked)
         self.btn_delete_step.clicked.connect(self._on_delete_step_clicked)
 
         self.steps_tab.setLayout(layout)
 
-    def _on_add_step_clicked(self):
-        # 테이블 맨 아래에 새 Step 한 줄 추가.
+    # --------------------------- Steps UI helpers ---------------------------
+
+    def _current_group_no(self) -> int:
+        """현재 선택된 행의 group_no, 없으면 새 그룹 번호를 돌려준다."""
+        row = self.steps_table.currentRow()
+        if row >= 0:
+            item = self.steps_table.item(row, 0)
+            if item and item.text().strip():
+                try:
+                    return int(item.text())
+                except ValueError:
+                    pass
+        # 선택이 없으면 max(group)+1
+        max_group = 0
+        for r in range(self.steps_table.rowCount()):
+            it = self.steps_table.item(r, 0)
+            if not it or not it.text().strip():
+                continue
+            try:
+                g = int(it.text())
+                if g > max_group:
+                    max_group = g
+            except ValueError:
+                continue
+        return max_group + 1 if max_group > 0 else 1
+
+    def _renumber_orders_per_group(self) -> None:
+        """각 group_no 별로 order_no 를 1부터 다시 매겨준다."""
+        # group_no, row 인덱스를 모아서 그룹별로 정렬 후 order 재부여
+        groups: Dict[int, List[int]] = {}
+        for r in range(self.steps_table.rowCount()):
+            item_group = self.steps_table.item(r, 0)
+            try:
+                g = int(item_group.text()) if item_group and item_group.text().strip() else 1
+            except ValueError:
+                g = 1
+            groups.setdefault(g, []).append(r)
+        for g, rows in groups.items():
+            for idx, r in enumerate(rows, start=1):
+                item_order = self.steps_table.item(r, 1)
+                if item_order is None:
+                    item_order = QTableWidgetItem(str(idx))
+                    self.steps_table.setItem(r, 1, item_order)
+                else:
+                    item_order.setText(str(idx))
+
+    def _on_add_group_clicked(self):
+        """새 그룹을 추가하고 첫 스텝 한 줄을 만든다."""
+        new_group = self._current_group_no()
         row = self.steps_table.rowCount()
         self.steps_table.insertRow(row)
-        # order 기본값
-        item_order = QTableWidgetItem(str(row + 1))
-        self.steps_table.setItem(row, 0, item_order)
+        from PySide6.QtWidgets import QTableWidgetItem
+
+        self.steps_table.setItem(row, 0, QTableWidgetItem(str(new_group)))
+        self.steps_table.setItem(row, 1, QTableWidgetItem("1"))
+        self._renumber_orders_per_group()
+
+    def _on_delete_group_clicked(self):
+        """선택된 행의 group_no 에 해당하는 모든 스텝을 삭제."""
+        row = self.steps_table.currentRow()
+        if row < 0:
+            return
+        item_group = self.steps_table.item(row, 0)
+        if not item_group or not item_group.text().strip():
+            return
+        try:
+            target_group = int(item_group.text())
+        except ValueError:
+            return
+
+        rows_to_delete = [r for r in range(self.steps_table.rowCount()) if
+                          (self.steps_table.item(r, 0) and self.steps_table.item(r, 0).text().strip() == str(target_group))]
+        for r in reversed(rows_to_delete):
+            self.steps_table.removeRow(r)
+        self._renumber_orders_per_group()
+
+    def _on_add_step_clicked(self):
+        """현재 그룹에 새 Step 한 줄 추가."""
+        from PySide6.QtWidgets import QTableWidgetItem
+
+        group_no = self._current_group_no()
+        # 현재 그룹의 마지막 행 뒤에 삽입
+        insert_row = self.steps_table.rowCount()
+        for r in range(self.steps_table.rowCount()):
+            item_group = self.steps_table.item(r, 0)
+            if not item_group or not item_group.text().strip():
+                continue
+            try:
+                g = int(item_group.text())
+            except ValueError:
+                continue
+            if g > group_no and r < insert_row:
+                insert_row = r
+                break
+
+        self.steps_table.insertRow(insert_row)
+        self.steps_table.setItem(insert_row, 0, QTableWidgetItem(str(group_no)))
+        # order_no 는 나중에 _renumber_orders_per_group 에서 재계산
+        self._renumber_orders_per_group()
 
     def _on_delete_step_clicked(self):
         # 선택된 행 삭제 (복수 선택 시 모두 삭제).
@@ -228,44 +340,48 @@ class IssueTabWidget(QTabWidget):
         rows = sorted({idx.row() for idx in selected}, reverse=True)
         for r in rows:
             self.steps_table.removeRow(r)
-        # order 재정렬
-        for i in range(self.steps_table.rowCount()):
-            item = self.steps_table.item(i, 0)
-            if item is None:
-                item = QTableWidgetItem(str(i + 1))
-                self.steps_table.setItem(i, 0, item)
-            else:
-                item.setText(str(i + 1))
+        self._renumber_orders_per_group()
 
     # --------------------------- Steps binding helpers ---------------------------
 
     def load_steps(self, steps: List[Dict[str, Any]]):
         """DB 등에서 읽어온 steps 리스트를 테이블에 로드."""
+        from PySide6.QtWidgets import QTableWidgetItem
+
         self.steps_table.setRowCount(0)
         for s in steps:
             row = self.steps_table.rowCount()
             self.steps_table.insertRow(row)
-            order_val = str(s.get("order_no", row + 1))
-            self.steps_table.setItem(row, 0, QTableWidgetItem(order_val))
-            self.steps_table.setItem(row, 1, QTableWidgetItem(s.get("action") or ""))
-            self.steps_table.setItem(row, 2, QTableWidgetItem(s.get("input") or ""))
-            self.steps_table.setItem(row, 3, QTableWidgetItem(s.get("expected") or ""))
+            group_val = str(s.get("group_no", 1))
+            order_val = str(s.get("order_no", 1))
+            self.steps_table.setItem(row, 0, QTableWidgetItem(group_val))
+            self.steps_table.setItem(row, 1, QTableWidgetItem(order_val))
+            self.steps_table.setItem(row, 2, QTableWidgetItem(s.get("action") or ""))
+            self.steps_table.setItem(row, 3, QTableWidgetItem(s.get("input") or ""))
+            self.steps_table.setItem(row, 4, QTableWidgetItem(s.get("expected") or ""))
+        self._renumber_orders_per_group()
 
     def collect_steps(self) -> List[Dict[str, Any]]:
         """테이블의 내용을 읽어 steps 리스트로 반환."""
         steps: List[Dict[str, Any]] = []
         rows = self.steps_table.rowCount()
         for r in range(rows):
-            order_item = self.steps_table.item(r, 0)
-            action_item = self.steps_table.item(r, 1)
-            input_item = self.steps_table.item(r, 2)
-            expected_item = self.steps_table.item(r, 3)
+            group_item = self.steps_table.item(r, 0)
+            order_item = self.steps_table.item(r, 1)
+            action_item = self.steps_table.item(r, 2)
+            input_item = self.steps_table.item(r, 3)
+            expected_item = self.steps_table.item(r, 4)
             try:
-                order_no = int(order_item.text()) if order_item and order_item.text().strip() else r + 1
+                group_no = int(group_item.text()) if group_item and group_item.text().strip() else 1
             except ValueError:
-                order_no = r + 1
+                group_no = 1
+            try:
+                order_no = int(order_item.text()) if order_item and order_item.text().strip() else 1
+            except ValueError:
+                order_no = 1
             steps.append(
                 {
+                    "group_no": group_no,
                     "order_no": order_no,
                     "action": action_item.text().strip() if action_item else "",
                     "input": input_item.text().strip() if input_item else "",
@@ -273,6 +389,15 @@ class IssueTabWidget(QTabWidget):
                 }
             )
         return steps
+
+    def set_preconditions_text(self, text: str) -> None:
+        if hasattr(self, "txt_preconditions"):
+            self.txt_preconditions.setPlainText(text or "")
+
+    def get_preconditions_text(self) -> str:
+        if hasattr(self, "txt_preconditions"):
+            return self.txt_preconditions.toPlainText().strip()
+        return ""
 
     def _init_requirements_tab(self):
         from PySide6.QtWidgets import QVBoxLayout, QTableWidget, QTableWidgetItem, QLabel
@@ -864,6 +989,9 @@ class IssueTabWidget(QTabWidget):
             self.ed_updated.setText("")
             self.ed_attachments.setText("")
             self.txt_description.setPlainText("")
+            # Preconditions (TEST_CASE용) 초기화
+            if hasattr(self, "set_preconditions_text"):
+                self.set_preconditions_text("")
             return
 
         self.ed_summary.setText(issue.get("summary") or "")
@@ -886,6 +1014,10 @@ class IssueTabWidget(QTabWidget):
         self.ed_local_id.setText(str(local_id) if local_id is not None else "")
         self.ed_jira_key.setText(issue.get("jira_key") or "")
         self.txt_description.setPlainText(issue.get("description") or "")
+        # Preconditions (TEST_CASE)
+        pre = issue.get("preconditions") or ""
+        if hasattr(self, "set_preconditions_text"):
+            self.set_preconditions_text(pre)
 
     def get_issue_updates(self) -> Dict[str, Any]:
         """
@@ -2103,6 +2235,8 @@ class MainWindow(QMainWindow):
             "due_date": tabs.ed_due_date.text().strip(),
             "description": tabs.txt_description.toPlainText().strip(),
         }
+        if issue_type == "TEST_CASE" and hasattr(tabs, "get_preconditions_text"):
+            fields["preconditions"] = tabs.get_preconditions_text()
         # 빈 문자열만 있는 키는 그대로 둬도 무방하지만, 필요시 None 제거도 가능
         update_issue_fields(self.conn, self.current_issue_id, fields)
 

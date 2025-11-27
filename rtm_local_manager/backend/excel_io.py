@@ -422,6 +422,7 @@ def import_project_from_excel(conn: sqlite3.Connection, project_id: int, file_pa
             header = [str(h) if h is not None else "" for h in rows[0]]
             col_idx = {name: i for i, name in enumerate(header)}
             steps_by_key: Dict[str, List[Dict[str, Any]]] = {}
+            preconditions_by_key: Dict[str, str] = {}
             for row in rows[1:]:
                 if not any(row):
                     continue
@@ -436,6 +437,18 @@ def import_project_from_excel(conn: sqlite3.Connection, project_id: int, file_pa
                 action = None
                 inp = None
                 expected = None
+                group_no = None
+
+                # Preconditions (Test Case 단위, 마지막 값이 우선)
+                idx_pre = col_idx.get("preconditions")
+                if idx_pre is not None and 0 <= idx_pre < len(row):
+                    pre_val = row[idx_pre]
+                    if pre_val not in (None, ""):
+                        preconditions_by_key[jira_key] = str(pre_val)
+
+                idx_group = col_idx.get("group_no")
+                if idx_group is not None and 0 <= idx_group < len(row):
+                    group_no = row[idx_group]
 
                 idx_order = col_idx.get("order_no")
                 if idx_order is not None and 0 <= idx_order < len(row):
@@ -452,6 +465,7 @@ def import_project_from_excel(conn: sqlite3.Connection, project_id: int, file_pa
 
                 steps_by_key.setdefault(jira_key, []).append(
                     {
+                        "group_no": int(group_no) if group_no is not None else 1,
                         "order_no": int(order_no) if order_no is not None else 0,
                         "action": str(action) if action is not None else "",
                         "input": str(inp) if inp is not None else "",
@@ -463,6 +477,9 @@ def import_project_from_excel(conn: sqlite3.Connection, project_id: int, file_pa
                 if not issue:
                     continue
                 replace_steps_for_issue(conn, issue["id"], steps)
+                pre = preconditions_by_key.get(jira_key)
+                if pre is not None:
+                    update_issue_fields(conn, issue["id"], {"preconditions": pre})
 
     # --- Relations 시트 처리
     if "Relations" in wb.sheetnames:
