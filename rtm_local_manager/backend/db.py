@@ -127,10 +127,20 @@ def init_db(conn: sqlite3.Connection) -> None:
             order_no            INTEGER,
             assignee            TEXT,
             result              TEXT,
+            actual_time         INTEGER,
             rtm_environment     TEXT,
             defects             TEXT
         );
         CREATE INDEX IF NOT EXISTS idx_tc_exec_te ON testcase_executions(testexecution_id);
+
+        CREATE TABLE IF NOT EXISTS testcase_step_executions (
+            id                      INTEGER PRIMARY KEY AUTOINCREMENT,
+            testcase_execution_id   INTEGER NOT NULL REFERENCES testcase_executions(id),
+            testcase_step_id        INTEGER NOT NULL REFERENCES testcase_steps(id),
+            status                  TEXT,
+            actual_result           TEXT,
+            evidence                TEXT
+        );
 
         CREATE TABLE IF NOT EXISTS relations (
             id              INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -167,6 +177,15 @@ def init_db(conn: sqlite3.Connection) -> None:
     if "group_no" not in step_cols:
         try:
             cur.execute("ALTER TABLE testcase_steps ADD COLUMN group_no INTEGER DEFAULT 1")
+        except sqlite3.OperationalError:
+            pass
+
+    # testcase_executions 에 actual_time 컬럼이 없으면 추가
+    cur.execute("PRAGMA table_info(testcase_executions)")
+    tce_cols = [r[1] for r in cur.fetchall()]
+    if "actual_time" not in tce_cols:
+        try:
+            cur.execute("ALTER TABLE testcase_executions ADD COLUMN actual_time INTEGER")
         except sqlite3.OperationalError:
             pass
 
@@ -231,6 +250,15 @@ def get_or_create_project(
     if "group_no" not in step_cols:
         try:
             cur.execute("ALTER TABLE testcase_steps ADD COLUMN group_no INTEGER DEFAULT 1")
+        except sqlite3.OperationalError:
+            pass
+
+    # testcase_executions 에 actual_time 컬럼이 없으면 추가
+    cur.execute("PRAGMA table_info(testcase_executions)")
+    tce_cols = [r[1] for r in cur.fetchall()]
+    if "actual_time" not in tce_cols:
+        try:
+            cur.execute("ALTER TABLE testcase_executions ADD COLUMN actual_time INTEGER")
         except sqlite3.OperationalError:
             pass
 
@@ -815,6 +843,7 @@ def get_testcase_executions(conn: sqlite3.Connection, testexecution_id: int) -> 
                t.order_no           AS order_no,
                t.assignee           AS assignee,
                t.result             AS result,
+               t.actual_time        AS actual_time,
                t.rtm_environment    AS rtm_environment,
                t.defects            AS defects,
                i.jira_key           AS jira_key,
@@ -839,6 +868,7 @@ def replace_testcase_executions(conn: sqlite3.Connection, testexecution_id: int,
       - order_no (int)
       - assignee (str)
       - result (str)
+      - actual_time (int)
       - rtm_environment (str)
       - defects (str)
     """
@@ -849,11 +879,16 @@ def replace_testcase_executions(conn: sqlite3.Connection, testexecution_id: int,
         if not tc_id:
             continue
         order_no = int(rec.get("order_no", 0) or 0)
+        actual_time = rec.get("actual_time")
+        try:
+            actual_time_int = int(actual_time) if actual_time not in (None, "") else 0
+        except (TypeError, ValueError):
+            actual_time_int = 0
         cur.execute(
             """
             INSERT INTO testcase_executions
-                (testexecution_id, testcase_id, order_no, assignee, result, rtm_environment, defects)
-            VALUES (?, ?, ?, ?, ?, ?, ?)
+                (testexecution_id, testcase_id, order_no, assignee, result, actual_time, rtm_environment, defects)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 testexecution_id,
@@ -861,8 +896,76 @@ def replace_testcase_executions(conn: sqlite3.Connection, testexecution_id: int,
                 order_no,
                 rec.get("assignee") or "",
                 rec.get("result") or "",
+                actual_time_int,
                 rec.get("rtm_environment") or "",
                 rec.get("defects") or "",
+            ),
+        )
+    conn.commit()
+
+
+# --- Test Case Step Execution helpers -------------------------------------------
+
+
+def get_step_executions_for_tce(conn: sqlite3.Connection, testcase_execution_id: int) -> List[Dict[str, Any]]:
+    """
+    주어진 testcase_execution_id 에 대한 Step 실행 상태 목록을 반환한다.
+
+    반환되는 각 dict 필드:
+      - testcase_step_id
+      - status
+      - actual_result
+      - evidence
+    """
+    cur = conn.cursor()
+    cur.execute(
+        """
+        SELECT testcase_step_id, status, actual_result, evidence
+          FROM testcase_step_executions
+         WHERE testcase_execution_id = ?
+         ORDER BY id ASC
+        """,
+        (testcase_execution_id,),
+    )
+    rows = cur.fetchall()
+    return [dict(r) for r in rows]
+
+
+def replace_step_executions_for_tce(
+    conn: sqlite3.Connection,
+    testcase_execution_id: int,
+    records: List[Dict[str, Any]],
+) -> None:
+    """
+    주어진 testcase_execution_id 에 대한 Step 실행 상태를 records 로 완전히 교체한다.
+
+    각 record 는 다음 키를 포함해야 한다:
+      - testcase_step_id (int)
+      - status (str)
+      - actual_result (str)
+      - evidence (str)
+    """
+    cur = conn.cursor()
+    cur.execute(
+        "DELETE FROM testcase_step_executions WHERE testcase_execution_id = ?",
+        (testcase_execution_id,),
+    )
+    for rec in records:
+        step_id = rec.get("testcase_step_id")
+        if not step_id:
+            continue
+        cur.execute(
+            """
+            INSERT INTO testcase_step_executions
+                (testcase_execution_id, testcase_step_id, status, actual_result, evidence)
+            VALUES (?, ?, ?, ?, ?)
+            """,
+            (
+                testcase_execution_id,
+                int(step_id),
+                rec.get("status") or "",
+                rec.get("actual_result") or "",
+                rec.get("evidence") or "",
             ),
         )
     conn.commit()

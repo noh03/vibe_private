@@ -70,6 +70,8 @@ from backend.db import (
     update_testexecution_for_issue,
     get_testcase_executions,
     replace_testcase_executions,
+    get_step_executions_for_tce,
+    replace_step_executions_for_tce,
     create_local_issue,
     soft_delete_issue,
     create_folder_node,
@@ -129,13 +131,22 @@ class IssueTabWidget(QTabWidget):
     # ------------------------------------------------------------------ Details
 
     def _init_details_tab(self):
-        from PySide6.QtWidgets import QFormLayout, QLineEdit, QTextEdit
+        from PySide6.QtWidgets import (
+            QFormLayout,
+            QLineEdit,
+            QTextEdit,
+            QVBoxLayout,
+            QGroupBox,
+            QPushButton,
+        )
 
-        layout = QFormLayout()
+        main_layout = QVBoxLayout()
+        form_layout = QFormLayout()
 
         # issues 테이블 스키마 기반 필드들
         self.ed_local_id = QLineEdit()
         self.ed_jira_key = QLineEdit()
+        self.ed_issue_type = QLineEdit()
         self.ed_summary = QLineEdit()
         self.ed_status = QLineEdit()
         self.ed_priority = QLineEdit()
@@ -156,29 +167,45 @@ class IssueTabWidget(QTabWidget):
         # 생성/수정 일시는 보통 읽기 전용
         self.ed_local_id.setReadOnly(True)
         self.ed_jira_key.setReadOnly(True)
+        self.ed_issue_type.setReadOnly(True)
         self.ed_created.setReadOnly(True)
         self.ed_updated.setReadOnly(True)
 
-        layout.addRow("Local ID", self.ed_local_id)
-        layout.addRow("JIRA Key", self.ed_jira_key)
-        layout.addRow("Summary", self.ed_summary)
-        layout.addRow("Status", self.ed_status)
-        layout.addRow("Priority", self.ed_priority)
-        layout.addRow("Assignee", self.ed_assignee)
-        layout.addRow("Reporter", self.ed_reporter)
-        layout.addRow("Labels", self.ed_labels)
-        layout.addRow("Components", self.ed_components)
-        layout.addRow("Security Level", self.ed_security_level)
-        layout.addRow("Fix Versions", self.ed_fix_versions)
-        layout.addRow("Affects Versions", self.ed_affects_versions)
-        layout.addRow("RTM Environment", self.ed_rtm_env)
-        layout.addRow("Due Date", self.ed_due_date)
-        layout.addRow("Created", self.ed_created)
-        layout.addRow("Updated", self.ed_updated)
-        layout.addRow("Attachments", self.ed_attachments)
-        layout.addRow("Description", self.txt_description)
+        form_layout.addRow("Local ID", self.ed_local_id)
+        form_layout.addRow("JIRA Key", self.ed_jira_key)
+        form_layout.addRow("Issue Type", self.ed_issue_type)
+        form_layout.addRow("Summary", self.ed_summary)
+        form_layout.addRow("Status", self.ed_status)
+        form_layout.addRow("Priority", self.ed_priority)
+        form_layout.addRow("Assignee", self.ed_assignee)
+        form_layout.addRow("Reporter", self.ed_reporter)
+        form_layout.addRow("Labels", self.ed_labels)
+        form_layout.addRow("Components", self.ed_components)
+        form_layout.addRow("Security Level", self.ed_security_level)
+        form_layout.addRow("Fix Versions", self.ed_fix_versions)
+        form_layout.addRow("Affects Versions", self.ed_affects_versions)
+        form_layout.addRow("RTM Environment", self.ed_rtm_env)
+        form_layout.addRow("Due Date", self.ed_due_date)
+        form_layout.addRow("Created", self.ed_created)
+        form_layout.addRow("Updated", self.ed_updated)
+        form_layout.addRow("Attachments", self.ed_attachments)
+        form_layout.addRow("Description", self.txt_description)
 
-        self.details_tab.setLayout(layout)
+        main_layout.addLayout(form_layout)
+
+        # Activity (Comments / History from JIRA)
+        activity_group = QGroupBox("Activity (Comments / History)")
+        activity_layout = QVBoxLayout(activity_group)
+        self.btn_refresh_activity = QPushButton("Load Activity from JIRA")
+        self.txt_activity = QTextEdit()
+        self.txt_activity.setReadOnly(True)
+        self.txt_activity.setPlaceholderText("JIRA 이슈의 Comments / History 를 여기에서 조회합니다.")
+        activity_layout.addWidget(self.btn_refresh_activity)
+        activity_layout.addWidget(self.txt_activity)
+
+        main_layout.addWidget(activity_group)
+
+        self.details_tab.setLayout(main_layout)
 
     # ------------------------------------------------------------------ Other tabs (wireframe for now)
 
@@ -555,7 +582,8 @@ class IssueTabWidget(QTabWidget):
             link_type_names = ["Relates", "Blocks", "Cloners", "Duplicates"]
         rel_type_combo.addItems(link_type_names + ["Web Link"])
         rel_layout = QHBoxLayout()
-        rel_layout.addWidget(QLabel("Relation Type:"))
+        # JIRA 용어에 맞게 Link Type 으로 표기
+        rel_layout.addWidget(QLabel("Link Type:"))
         rel_layout.addWidget(rel_type_combo)
         layout.addLayout(rel_layout)
 
@@ -656,58 +684,737 @@ class IssueTabWidget(QTabWidget):
         return rels
 
     def _init_testcases_tab(self):
-        from PySide6.QtWidgets import QVBoxLayout, QHBoxLayout, QPushButton, QTableWidget, QTableWidgetItem, QLabel
+        from PySide6.QtWidgets import (
+            QVBoxLayout,
+            QHBoxLayout,
+            QPushButton,
+            QTableWidget,
+            QTableWidgetItem,
+            QLabel,
+        )
 
         layout = QVBoxLayout()
-        layout.addWidget(QLabel("Test Plan - Test Cases mapping (for TEST_PLAN issues)"))
+        # 헤더 라벨은 이슈 타입에 따라 동적으로 변경된다.
+        self.lbl_testcases_header = QLabel("")
+        layout.addWidget(self.lbl_testcases_header)
 
         btn_layout = QHBoxLayout()
+        # REQUIREMENT / DEFECT 등에서 사용하는 버튼
+        self.btn_cover_by_tc = QPushButton("Cover by TC...")
+        self.btn_create_tc = QPushButton("Create New Test Case...")
+        # TEST_PLAN 에서 사용하는 버튼
         self.btn_add_tp_tc = QPushButton("Add Test Case")
         self.btn_del_tp_tc = QPushButton("Delete Selected")
+        self.btn_edit_tp_order = QPushButton("Edit order")
+
+        btn_layout.addWidget(self.btn_cover_by_tc)
+        btn_layout.addWidget(self.btn_create_tc)
         btn_layout.addWidget(self.btn_add_tp_tc)
         btn_layout.addWidget(self.btn_del_tp_tc)
+        btn_layout.addWidget(self.btn_edit_tp_order)
         btn_layout.addStretch()
         layout.addLayout(btn_layout)
 
+        # 단일 테이블을 이슈 타입에 따라 다르게 사용한다.
         self.testplan_tc_table = QTableWidget()
-        self.testplan_tc_table.setColumnCount(4)
-        self.testplan_tc_table.setHorizontalHeaderLabels(["Order", "Test Case ID", "Jira Key", "Summary"])
         self.testplan_tc_table.horizontalHeader().setStretchLastSection(True)
         layout.addWidget(self.testplan_tc_table)
 
+        # 시그널 연결
+        self.btn_cover_by_tc.clicked.connect(self._on_cover_by_testcase_clicked)
+        self.btn_create_tc.clicked.connect(self._on_create_testcase_clicked)
         self.btn_add_tp_tc.clicked.connect(self._on_add_tp_tc_clicked)
         self.btn_del_tp_tc.clicked.connect(self._on_del_tp_tc_clicked)
+        self.btn_edit_tp_order.clicked.connect(self._on_toggle_tp_order_edit)
+
+        # Test Plan order 편집 모드 상태
+        self._tp_order_edit_mode: bool = False
 
         self.testcases_tab.setLayout(layout)
 
     def _on_add_tp_tc_clicked(self):
-        """Test Plan - Test Case 매핑 테이블에 새 행 추가."""
-        row = self.testplan_tc_table.rowCount()
-        self.testplan_tc_table.insertRow(row)
-        # order 기본값
-        self.testplan_tc_table.setItem(row, 0, QTableWidgetItem(str(row + 1)))
+        """
+        Test Plan - Test Case 매핑에 기존 Test Case 들을 추가한다.
+        (Test Plan 이슈의 Test Cases 탭에서 'Add Test Case' 버튼)
+        """
+        from PySide6.QtWidgets import (
+            QDialog,
+            QVBoxLayout,
+            QDialogButtonBox,
+            QTableWidget,
+            QTableWidgetItem,
+            QLabel,
+        )
+
+        main_win = self.window()
+        if not hasattr(main_win, "conn") or getattr(main_win, "project", None) is None:
+            return
+
+        if getattr(main_win, "current_issue_id", None) is None:
+            main_win.status_bar.showMessage("No Test Plan selected.")
+            return
+
+        issue = get_issue_by_id(main_win.conn, main_win.current_issue_id)
+        if not issue or (issue.get("issue_type") or "").upper() != "TEST_PLAN":
+            main_win.status_bar.showMessage("Current issue is not a TEST_PLAN.")
+            return
+
+        # 프로젝트 내 TEST_CASE 이슈 목록 조회
+        cur = main_win.conn.cursor()
+        cur.execute(
+            """
+            SELECT id, jira_key, summary, priority, assignee, components, rtm_environment
+              FROM issues
+             WHERE project_id = ? AND is_deleted = 0 AND UPPER(issue_type) = 'TEST_CASE'
+             ORDER BY jira_key, summary
+            """,
+            (main_win.project.id,),
+        )
+        rows = cur.fetchall()
+        testcases = [dict(r) for r in rows]
+        if not testcases:
+            main_win.status_bar.showMessage("No TEST_CASE issues found in this project.")
+            return
+
+        dlg = QDialog(self)
+        dlg.setWindowTitle("Add Test Case to Test Plan")
+        vbox = QVBoxLayout(dlg)
+        vbox.addWidget(QLabel("Select Test Cases to add to this Test Plan:"))
+
+        table = QTableWidget()
+        table.setColumnCount(6)
+        table.setHorizontalHeaderLabels(
+            ["Jira Key", "Summary", "Priority", "Assignee", "Components", "RTM Env"]
+        )
+        table.horizontalHeader().setStretchLastSection(True)
+        table.setSelectionBehavior(QAbstractItemView.SelectRows)
+        table.setSelectionMode(QAbstractItemView.MultiSelection)
+
+        for tc in testcases:
+            row_idx = table.rowCount()
+            table.insertRow(row_idx)
+            table.setItem(row_idx, 0, QTableWidgetItem(tc.get("jira_key") or ""))
+            table.setItem(row_idx, 1, QTableWidgetItem(tc.get("summary") or ""))
+            table.setItem(row_idx, 2, QTableWidgetItem(tc.get("priority") or ""))
+            table.setItem(row_idx, 3, QTableWidgetItem(tc.get("assignee") or ""))
+            table.setItem(row_idx, 4, QTableWidgetItem(tc.get("components") or ""))
+            table.setItem(row_idx, 5, QTableWidgetItem(tc.get("rtm_environment") or ""))
+            table.item(row_idx, 0).setData(Qt.UserRole, tc.get("id"))
+
+        vbox.addWidget(table)
+
+        btn_box = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
+        vbox.addWidget(btn_box)
+
+        def on_accept():
+            selected_rows = {idx.row() for idx in table.selectedIndexes()}
+            if not selected_rows:
+                dlg.reject()
+                return
+
+            tp_id = int(main_win.current_issue_id)
+            # 기존 매핑 읽기
+            existing = get_testplan_testcases(main_win.conn, tp_id)
+            existing_tc_ids = {
+                int(r.get("testcase_id")) for r in existing if r.get("testcase_id")
+            }
+            records = [
+                {
+                    "testcase_id": int(r["testcase_id"]),
+                    "order_no": int(r.get("order_no", 0) or 0),
+                }
+                for r in existing
+            ]
+
+            for r_idx in selected_rows:
+                item = table.item(r_idx, 0)
+                if not item:
+                    continue
+                tc_id = item.data(Qt.UserRole)
+                if not tc_id or int(tc_id) in existing_tc_ids:
+                    continue
+                records.append({"testcase_id": int(tc_id), "order_no": 0})
+
+            # order_no 재정렬
+            for i, rec in enumerate(records, start=1):
+                rec["order_no"] = i
+
+            replace_testplan_testcases(main_win.conn, tp_id, records)
+
+            # UI 갱신
+            tp_records = get_testplan_testcases(main_win.conn, tp_id)
+            if hasattr(main_win.left_panel.issue_tabs, "load_testplan_testcases"):
+                main_win.left_panel.issue_tabs.load_testplan_testcases(tp_records)
+
+            main_win.status_bar.showMessage(
+                f"Added {len(selected_rows)} Test Case(s) to Test Plan."
+            )
+            dlg.accept()
+
+        btn_box.accepted.connect(on_accept)
+        btn_box.rejected.connect(dlg.reject)
+
+        dlg.exec()
 
     def _on_del_tp_tc_clicked(self):
-        """선택된 매핑 행 삭제 및 order 재정렬."""
+        """선택된 매핑 행 삭제 및 DB 반영."""
+        main_win = self.window()
+        if not hasattr(main_win, "conn") or getattr(main_win, "project", None) is None:
+            return
+        if getattr(main_win, "current_issue_id", None) is None:
+            main_win.status_bar.showMessage("No Test Plan selected.")
+            return
+
         selected = self.testplan_tc_table.selectedIndexes()
         if not selected:
             return
         rows = sorted({idx.row() for idx in selected}, reverse=True)
         for r in rows:
             self.testplan_tc_table.removeRow(r)
-        # order 재정렬
-        for i in range(self.testplan_tc_table.rowCount()):
-            item = self.testplan_tc_table.item(i, 0)
-            if item is None:
-                item = QTableWidgetItem(str(i + 1))
-                self.testplan_tc_table.setItem(i, 0, item)
-            else:
-                item.setText(str(i + 1))
+
+        # 남은 행 기준으로 order_no 재계산 후 DB 갱신
+        try:
+            tp_records = self.collect_testplan_testcases()
+            # 순서 재정렬
+            for i, rec in enumerate(tp_records, start=1):
+                rec["order_no"] = i
+            replace_testplan_testcases(main_win.conn, int(main_win.current_issue_id), tp_records)
+
+            # UI 재로드
+            new_records = get_testplan_testcases(
+                main_win.conn, int(main_win.current_issue_id)
+            )
+            if hasattr(main_win.left_panel.issue_tabs, "load_testplan_testcases"):
+                main_win.left_panel.issue_tabs.load_testplan_testcases(new_records)
+        except Exception as e:
+            print(f"[WARN] Failed to delete test plan testcases: {e}")
+
+    def _on_toggle_tp_order_edit(self):
+        """
+        Test Plan Test Cases 탭의 'Edit order' / 'Accept order' 토글 버튼.
+        - 사용자는 Order 컬럼을 수정한 뒤, 'Accept order' 를 눌러 순서를 확정한다.
+        """
+        main_win = self.window()
+        if not hasattr(main_win, "conn") or getattr(main_win, "project", None) is None:
+            return
+        if getattr(main_win, "current_issue_id", None) is None:
+            main_win.status_bar.showMessage("No Test Plan selected.")
+            return
+
+        # 첫 클릭: 편집 모드 진입
+        if not self._tp_order_edit_mode:
+            self._tp_order_edit_mode = True
+            self.btn_edit_tp_order.setText("Accept order")
+            main_win.status_bar.showMessage(
+                "Edit the 'Order' column, then click 'Accept order' to save."
+            )
+            return
+
+        # 두 번째 클릭: 현재 Order 값을 기준으로 순서 확정 및 DB 저장
+        try:
+            tp_id = int(main_win.current_issue_id)
+            records = self.collect_testplan_testcases()
+            # 사용자가 입력한 order_no 기준으로 정렬
+            records.sort(key=lambda r: int(r.get("order_no", 0) or 0))
+            # 1..N 으로 재번호 부여
+            for i, rec in enumerate(records, start=1):
+                rec["order_no"] = i
+
+            replace_testplan_testcases(main_win.conn, tp_id, records)
+
+            # UI 재로드
+            new_records = get_testplan_testcases(main_win.conn, tp_id)
+            if hasattr(main_win.left_panel.issue_tabs, "load_testplan_testcases"):
+                main_win.left_panel.issue_tabs.load_testplan_testcases(new_records)
+
+            main_win.status_bar.showMessage("Test Plan Test Cases order has been saved.")
+        except Exception as e:
+            print(f"[WARN] Failed to accept Test Plan order: {e}")
+            main_win.status_bar.showMessage(f"Failed to save order: {e}")
+        finally:
+            self._tp_order_edit_mode = False
+            self.btn_edit_tp_order.setText("Edit order")
+
+    # --------------------------- Requirement: Cover by / Create Test Case --------
+
+    def _on_cover_by_testcase_clicked(self):
+        """
+        REQUIREMENT 이슈에서 'Cover by Test Case...' 버튼을 눌렀을 때:
+        - 현재 프로젝트의 TEST_CASE 이슈 목록을 보여주고
+        - 선택된 Test Case 들을 현재 Requirement 와 relations 로 연결한다.
+        """
+        from PySide6.QtWidgets import (
+            QDialog,
+            QVBoxLayout,
+            QHBoxLayout,
+            QDialogButtonBox,
+            QTableWidgetItem,
+            QLabel,
+        )
+
+        main_win = self.window()
+        if not hasattr(main_win, "conn") or getattr(main_win, "project", None) is None:
+            return
+
+        if getattr(main_win, "current_issue_id", None) is None:
+            main_win.status_bar.showMessage("No issue selected; cannot cover by test case.")
+            return
+
+        # 현재 이슈가 REQUIREMENT 인지 확인
+        src_issue = get_issue_by_id(main_win.conn, main_win.current_issue_id)
+        if not src_issue or (src_issue.get("issue_type") or "").upper() != "REQUIREMENT":
+            main_win.status_bar.showMessage("Current issue is not a REQUIREMENT; 'Cover by Test Case' is disabled.")
+            return
+
+        # 프로젝트 내 TEST_CASE 이슈 목록 조회
+        cur = main_win.conn.cursor()
+        cur.execute(
+            """
+            SELECT id, jira_key, summary, priority, assignee, components, rtm_environment
+              FROM issues
+             WHERE project_id = ? AND is_deleted = 0 AND UPPER(issue_type) = 'TEST_CASE'
+             ORDER BY jira_key, summary
+            """,
+            (main_win.project.id,),
+        )
+        rows = cur.fetchall()
+        testcases = [dict(r) for r in rows]
+
+        if not testcases:
+            main_win.status_bar.showMessage("No TEST_CASE issues found in this project.")
+            return
+
+        dlg = QDialog(self)
+        dlg.setWindowTitle("Cover by Test Case")
+        vbox = QVBoxLayout(dlg)
+        vbox.addWidget(QLabel("Select Test Cases to cover this Requirement:"))
+
+        table = QTableWidget()
+        table.setColumnCount(6)
+        table.setHorizontalHeaderLabels(
+            ["Jira Key", "Summary", "Priority", "Assignee", "Components", "RTM Env"]
+        )
+        table.horizontalHeader().setStretchLastSection(True)
+        table.setSelectionBehavior(QAbstractItemView.SelectRows)
+        table.setSelectionMode(QAbstractItemView.MultiSelection)
+
+        for tc in testcases:
+            row_idx = table.rowCount()
+            table.insertRow(row_idx)
+            table.setItem(row_idx, 0, QTableWidgetItem(tc.get("jira_key") or ""))
+            table.setItem(row_idx, 1, QTableWidgetItem(tc.get("summary") or ""))
+            table.setItem(row_idx, 2, QTableWidgetItem(tc.get("priority") or ""))
+            table.setItem(row_idx, 3, QTableWidgetItem(tc.get("assignee") or ""))
+            table.setItem(row_idx, 4, QTableWidgetItem(tc.get("components") or ""))
+            table.setItem(row_idx, 5, QTableWidgetItem(tc.get("rtm_environment") or ""))
+            # 내부적으로 issue_id 저장
+            table.item(row_idx, 0).setData(Qt.UserRole, tc.get("id"))
+
+        vbox.addWidget(table)
+
+        btn_box = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
+        vbox.addWidget(btn_box)
+
+        def on_accept():
+            selected_rows = {idx.row() for idx in table.selectedIndexes()}
+            if not selected_rows:
+                dlg.reject()
+                return
+
+            # 기존 relations 를 가져와서, 선택된 Test Case 들을 추가한 새 리스트 구성
+            existing_rels = get_relations_for_issue(main_win.conn, main_win.current_issue_id)
+            existing_dst_ids = {int(r.get("dst_issue_id")) for r in existing_rels if r.get("dst_issue_id")}
+            new_rels = [
+                {"dst_issue_id": r.get("dst_issue_id"), "relation_type": r.get("relation_type") or ""}
+                for r in existing_rels
+            ]
+
+            for r in selected_rows:
+                item = table.item(r, 0)
+                if not item:
+                    continue
+                tc_id = item.data(Qt.UserRole)
+                if not tc_id or tc_id in existing_dst_ids:
+                    continue
+                new_rels.append({"dst_issue_id": int(tc_id), "relation_type": "Tests"})
+
+            replace_relations_for_issue(main_win.conn, main_win.current_issue_id, new_rels)
+
+            # UI 갱신: Relations / Requirements / Linked Test Cases
+            rels = get_relations_for_issue(main_win.conn, main_win.current_issue_id)
+            if hasattr(main_win.left_panel.issue_tabs, "load_relations"):
+                main_win.left_panel.issue_tabs.load_relations(rels)
+            if hasattr(main_win.left_panel.issue_tabs, "load_requirements"):
+                reqs = [
+                    r for r in rels if (r.get("dst_issue_type") or "").upper() == "REQUIREMENT"
+                ]
+                main_win.left_panel.issue_tabs.load_requirements(reqs)
+            if hasattr(main_win.left_panel.issue_tabs, "load_linked_testcases"):
+                tcs = [
+                    r for r in rels if (r.get("dst_issue_type") or "").upper() == "TEST_CASE"
+                ]
+                main_win.left_panel.issue_tabs.load_linked_testcases(tcs)
+
+            dlg.accept()
+
+        btn_box.accepted.connect(on_accept)
+        btn_box.rejected.connect(dlg.reject)
+
+        dlg.exec()
+
+    def _on_create_testcase_clicked(self):
+        """
+        REQUIREMENT 이슈에서 'Create New Test Case...' 버튼:
+        - 간단한 팝업에서 Summary 등을 입력 받아
+        - 동일 프로젝트 / 동일 폴더에 TEST_CASE 로컬 이슈를 생성하고
+        - 현재 Requirement 와 relation 으로 연결한다.
+        """
+        from PySide6.QtWidgets import (
+            QDialog,
+            QVBoxLayout,
+            QFormLayout,
+            QLineEdit,
+            QDialogButtonBox,
+            QLabel,
+        )
+
+        main_win = self.window()
+        if not hasattr(main_win, "conn") or getattr(main_win, "project", None) is None:
+            return
+        if getattr(main_win, "current_issue_id", None) is None:
+            QMessageBox.warning(
+                self,
+                "Create Test Case",
+                "No Requirement is selected.\n\n"
+                "Please select a Requirement in the left tree first.",
+            )
+            return
+
+        src_issue = get_issue_by_id(main_win.conn, main_win.current_issue_id)
+        if not src_issue or (src_issue.get("issue_type") or "").upper() != "REQUIREMENT":
+            QMessageBox.warning(
+                self,
+                "Create Test Case",
+                "Current issue is not a REQUIREMENT.\n\n"
+                "Select a Requirement in the tree to create a Test Case linked to it.",
+            )
+            return
+
+        dlg = QDialog(self)
+        dlg.setWindowTitle("Create New Test Case")
+        vbox = QVBoxLayout(dlg)
+        vbox.addWidget(QLabel("New Test Case will be created as local-only issue linked to this Requirement."))
+
+        form = QFormLayout()
+        ed_summary = QLineEdit()
+        ed_summary.setPlaceholderText("Summary")
+        ed_priority = QLineEdit()
+        ed_assignee = QLineEdit()
+        form.addRow("Summary*", ed_summary)
+        form.addRow("Priority", ed_priority)
+        form.addRow("Assignee", ed_assignee)
+        vbox.addLayout(form)
+
+        btn_box = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
+        vbox.addWidget(btn_box)
+
+        def on_accept():
+            summary = ed_summary.text().strip()
+            if not summary:
+                main_win.status_bar.showMessage("Summary is required to create a Test Case.")
+                return
+
+            folder_id = src_issue.get("folder_id")
+            from backend.db import create_local_issue, update_issue_fields
+            new_tc_id = create_local_issue(
+                main_win.conn,
+                project_id=main_win.project.id,
+                issue_type="TEST_CASE",
+                folder_id=folder_id,
+                summary=summary,
+            )
+            fields: Dict[str, Any] = {}
+            if ed_priority.text().strip():
+                fields["priority"] = ed_priority.text().strip()
+            if ed_assignee.text().strip():
+                fields["assignee"] = ed_assignee.text().strip()
+            if fields:
+                update_issue_fields(main_win.conn, new_tc_id, fields)
+
+            # Requirement 와 새 Test Case 를 relation 으로 연결
+            existing_rels = get_relations_for_issue(main_win.conn, main_win.current_issue_id)
+            new_rels = [
+                {"dst_issue_id": r.get("dst_issue_id"), "relation_type": r.get("relation_type") or ""}
+                for r in existing_rels
+            ]
+            new_rels.append({"dst_issue_id": new_tc_id, "relation_type": "Tests"})
+            replace_relations_for_issue(main_win.conn, main_win.current_issue_id, new_rels)
+
+            # UI 갱신
+            rels = get_relations_for_issue(main_win.conn, main_win.current_issue_id)
+            if hasattr(main_win.left_panel.issue_tabs, "load_relations"):
+                main_win.left_panel.issue_tabs.load_relations(rels)
+            if hasattr(main_win.left_panel.issue_tabs, "load_requirements"):
+                reqs = [
+                    r for r in rels if (r.get("dst_issue_type") or "").upper() == "REQUIREMENT"
+                ]
+                main_win.left_panel.issue_tabs.load_requirements(reqs)
+            if hasattr(main_win.left_panel.issue_tabs, "load_linked_testcases"):
+                tcs = [
+                    r for r in rels if (r.get("dst_issue_type") or "").upper() == "TEST_CASE"
+                ]
+                main_win.left_panel.issue_tabs.load_linked_testcases(tcs)
+
+            main_win.reload_local_tree()
+            dlg.accept()
+
+        btn_box.accepted.connect(on_accept)
+        btn_box.rejected.connect(dlg.reject)
+
+        dlg.exec()
+
+    # ------------------------------------------------------------------ Test Cases top-level actions
+
+    def _selected_local_testcase_ids(self) -> list[int]:
+        """
+        좌측(Local) 트리에서 선택된 TEST_CASE 이슈들의 로컬 ID 리스트를 반환.
+        현재 상단 탭이 Test Cases 일 때 Add to Test Plan / Link to Requirement 에서 사용한다.
+        """
+        ids: list[int] = []
+        view = self.left_panel.tree_view
+        model = view.model()
+        if model is None:
+            return ids
+        for idx in view.selectedIndexes():
+            if idx.column() != 0:
+                continue
+            item = model.itemFromIndex(idx)
+            if not item:
+                continue
+            node_type = item.data(Qt.UserRole)
+            if node_type != "ISSUE":
+                continue
+            issue_id = item.data(Qt.UserRole + 1)
+            issue_type = (item.data(Qt.UserRole + 3) or "").upper()
+            if not issue_id or issue_type != "TEST_CASE":
+                continue
+            try:
+                ids.append(int(issue_id))
+            except (TypeError, ValueError):
+                continue
+        return ids
+
+    def on_add_testcases_to_testplan_clicked(self):
+        """
+        상단 Test Cases 탭에서 'Add to Test Plan' 버튼:
+        - 트리에서 선택된 TEST_CASE 이슈들을 하나의 Test Plan 에 추가한다.
+        """
+        tc_ids = self._selected_local_testcase_ids()
+        if not tc_ids:
+            self.status_bar.showMessage("No Test Cases selected in the tree.")
+            return
+
+        # 프로젝트 내 TEST_PLAN 목록 조회
+        cur = self.conn.cursor()
+        cur.execute(
+            """
+            SELECT id, jira_key, summary
+              FROM issues
+             WHERE project_id = ? AND is_deleted = 0 AND UPPER(issue_type) = 'TEST_PLAN'
+             ORDER BY jira_key, summary
+            """,
+            (self.project.id,),
+        )
+        rows = cur.fetchall()
+        plans = [dict(r) for r in rows]
+        if not plans:
+            self.status_bar.showMessage("No TEST_PLAN issues found; cannot add Test Cases.")
+            return
+
+        from PySide6.QtWidgets import (
+            QDialog,
+            QVBoxLayout,
+            QDialogButtonBox,
+            QListWidget,
+            QListWidgetItem,
+            QLabel,
+        )
+
+        dlg = QDialog(self)
+        dlg.setWindowTitle("Add to Test Plan")
+        vbox = QVBoxLayout(dlg)
+        vbox.addWidget(QLabel("Select a Test Plan to add the selected Test Cases:"))
+
+        lst = QListWidget()
+        for p in plans:
+            key = p.get("jira_key") or f"ID={p.get('id')}"
+            text = key
+            if p.get("summary"):
+                text += f" - {p.get('summary')}"
+            item = QListWidgetItem(text)
+            item.setData(Qt.UserRole, p.get("id"))
+            lst.addItem(item)
+        vbox.addWidget(lst)
+
+        btn_box = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
+        vbox.addWidget(btn_box)
+
+        def on_accept():
+            item = lst.currentItem()
+            if not item:
+                self.status_bar.showMessage("No Test Plan selected.")
+                return
+            tp_id = item.data(Qt.UserRole)
+            if not tp_id:
+                return
+
+            # 기존 매핑을 읽고 선택된 Test Case 들을 추가
+            existing = get_testplan_testcases(self.conn, int(tp_id))
+            existing_tc_ids = {int(r.get("testcase_id")) for r in existing if r.get("testcase_id")}
+            records = [
+                {"testcase_id": int(r["testcase_id"]), "order_no": int(r.get("order_no", 0) or 0)}
+                for r in existing
+            ]
+
+            for tc_id in tc_ids:
+                if tc_id in existing_tc_ids:
+                    continue
+                records.append({"testcase_id": tc_id, "order_no": 0})
+
+            # order_no 재정렬
+            for idx, rec in enumerate(records, start=1):
+                rec["order_no"] = idx
+
+            replace_testplan_testcases(self.conn, int(tp_id), records)
+            self.status_bar.showMessage(
+                f"Added {len(tc_ids)} Test Case(s) to Test Plan (id={tp_id})."
+            )
+            dlg.accept()
+
+        btn_box.accepted.connect(on_accept)
+        btn_box.rejected.connect(dlg.reject)
+
+        dlg.exec()
+
+    def on_link_testcases_to_requirement_clicked(self):
+        """
+        상단 Test Cases 탭에서 'Link to Requirement' 버튼:
+        - 트리에서 선택된 TEST_CASE 이슈들을 선택한 Requirement 와 relation 으로 연결한다.
+        """
+        tc_ids = self._selected_local_testcase_ids()
+        if not tc_ids:
+            self.status_bar.showMessage("No Test Cases selected in the tree.")
+            return
+
+        # 프로젝트 내 REQUIREMENT 목록 조회
+        cur = self.conn.cursor()
+        cur.execute(
+            """
+            SELECT id, jira_key, summary
+              FROM issues
+             WHERE project_id = ? AND is_deleted = 0 AND UPPER(issue_type) = 'REQUIREMENT'
+             ORDER BY jira_key, summary
+            """,
+            (self.project.id,),
+        )
+        rows = cur.fetchall()
+        reqs = [dict(r) for r in rows]
+        if not reqs:
+            self.status_bar.showMessage("No REQUIREMENT issues found; cannot link.")
+            return
+
+        from PySide6.QtWidgets import (
+            QDialog,
+            QVBoxLayout,
+            QDialogButtonBox,
+            QListWidget,
+            QListWidgetItem,
+            QLabel,
+        )
+
+        dlg = QDialog(self)
+        dlg.setWindowTitle("Link to Requirement")
+        vbox = QVBoxLayout(dlg)
+        vbox.addWidget(QLabel("Select a Requirement to link the selected Test Cases:"))
+
+        lst = QListWidget()
+        for r in reqs:
+            key = r.get("jira_key") or f"ID={r.get('id')}"
+            text = key
+            if r.get("summary"):
+                text += f" - {r.get('summary')}"
+            item = QListWidgetItem(text)
+            item.setData(Qt.UserRole, r.get("id"))
+            lst.addItem(item)
+        vbox.addWidget(lst)
+
+        btn_box = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
+        vbox.addWidget(btn_box)
+
+        def on_accept():
+            item = lst.currentItem()
+            if not item:
+                self.status_bar.showMessage("No Requirement selected.")
+                return
+            req_id = item.data(Qt.UserRole)
+            if not req_id:
+                return
+
+            # Requirement 를 src 로 하는 relations 를 읽고, 선택된 Test Case 들을 추가
+            existing_rels = get_relations_for_issue(self.conn, int(req_id))
+            existing_dst_ids = {
+                int(r.get("dst_issue_id")) for r in existing_rels if r.get("dst_issue_id")
+            }
+            new_rels = [
+                {"dst_issue_id": r.get("dst_issue_id"), "relation_type": r.get("relation_type") or ""}
+                for r in existing_rels
+            ]
+            for tc_id in tc_ids:
+                if tc_id in existing_dst_ids:
+                    continue
+                new_rels.append({"dst_issue_id": tc_id, "relation_type": "Tests"})
+
+            replace_relations_for_issue(self.conn, int(req_id), new_rels)
+
+            # 현재 선택 이슈/탭이 이 Requirement 이거나 관련 있을 경우, UI 갱신
+            if self.current_issue_id == int(req_id):
+                rels = get_relations_for_issue(self.conn, int(req_id))
+                if hasattr(self.left_panel.issue_tabs, "load_relations"):
+                    self.left_panel.issue_tabs.load_relations(rels)
+                if hasattr(self.left_panel.issue_tabs, "load_requirements"):
+                    reqs2 = [
+                        r
+                        for r in rels
+                        if (r.get("dst_issue_type") or "").upper() == "REQUIREMENT"
+                    ]
+                    self.left_panel.issue_tabs.load_requirements(reqs2)
+                if hasattr(self.left_panel.issue_tabs, "load_linked_testcases"):
+                    tcs2 = [
+                        r
+                        for r in rels
+                        if (r.get("dst_issue_type") or "").upper() == "TEST_CASE"
+                    ]
+                    self.left_panel.issue_tabs.load_linked_testcases(tcs2)
+
+            self.status_bar.showMessage(
+                f"Linked {len(tc_ids)} Test Case(s) to Requirement (id={req_id})."
+            )
+            dlg.accept()
+
+        btn_box.accepted.connect(on_accept)
+        btn_box.rejected.connect(dlg.reject)
+
+        dlg.exec()
 
     # --------------------------- Test Plan / Test Cases binding ------------------
 
     def load_testplan_testcases(self, records: List[Dict[str, Any]]):
         """DB에서 읽어온 Test Plan - Test Case 매핑을 테이블에 로드."""
+        # TEST_PLAN 용 컬럼 구성 보장
+        self.testplan_tc_table.setColumnCount(4)
+        self.testplan_tc_table.setHorizontalHeaderLabels(
+            ["Order", "Test Case ID", "Jira Key", "Summary"]
+        )
         self.testplan_tc_table.setRowCount(0)
         for rec in records:
             row = self.testplan_tc_table.rowCount()
@@ -752,53 +1459,487 @@ class IssueTabWidget(QTabWidget):
             QPushButton,
             QTableWidget,
             QTableWidgetItem,
+            QComboBox,
         )
 
         layout = QVBoxLayout()
-        layout.addWidget(QLabel("Test Execution details (for TEST_EXECUTION issues)"))
+        # 실행/실행결과 탭 헤더는 이슈 타입에 따라 동적으로 변경
+        self.lbl_exec_header = QLabel("Executions")
+        layout.addWidget(self.lbl_exec_header)
+
+        # 상단 대시보드: TE executed 요약
+        dash_layout = QHBoxLayout()
+        self.lbl_te_executed = QLabel("TE executed: 0/0 (0%)")
+        dash_layout.addWidget(self.lbl_te_executed)
+        dash_layout.addStretch()
+        layout.addLayout(dash_layout)
+
+        # 상단 필터바: Assignee / Result / RTM Env 기준 필터
+        filter_layout = QHBoxLayout()
+        filter_layout.addWidget(QLabel("Assignee:"))
+        self.cmb_te_filter_assignee = QComboBox()
+        self.cmb_te_filter_assignee.setEditable(False)
+        filter_layout.addWidget(self.cmb_te_filter_assignee)
+
+        filter_layout.addWidget(QLabel("Result:"))
+        self.cmb_te_filter_result = QComboBox()
+        self.cmb_te_filter_result.setEditable(False)
+        filter_layout.addWidget(self.cmb_te_filter_result)
+
+        filter_layout.addWidget(QLabel("RTM Env:"))
+        self.cmb_te_filter_env = QComboBox()
+        self.cmb_te_filter_env.setEditable(False)
+        filter_layout.addWidget(self.cmb_te_filter_env)
+
+        filter_layout.addStretch()
+        layout.addLayout(filter_layout)
 
         # 상단: Test Execution 메타 정보 (Environment, Start/End, Result, Executed By)
         form_layout = QFormLayout()
         self.ed_te_env = QLineEdit()
         self.ed_te_start = QLineEdit()
         self.ed_te_end = QLineEdit()
-        self.ed_te_result = QLineEdit()
+        self.cmb_te_result = QComboBox()
+        self.cmb_te_result.setEditable(False)
+        self.cmb_te_result.addItems(
+            [
+                "",
+                "In progress",
+                "Pass",
+                "Fail",
+                "Blocked",
+                "Passed with restrictions",
+            ]
+        )
         self.ed_te_executed_by = QLineEdit()
         form_layout.addRow("Environment", self.ed_te_env)
         form_layout.addRow("Start Date", self.ed_te_start)
         form_layout.addRow("End Date", self.ed_te_end)
-        form_layout.addRow("Result", self.ed_te_result)
+        form_layout.addRow("Result", self.cmb_te_result)
         form_layout.addRow("Executed By", self.ed_te_executed_by)
         layout.addLayout(form_layout)
 
         # 중간: 버튼
         btn_layout = QHBoxLayout()
+        # TEST_PLAN 용: Execute Test Plan
+        self.btn_execute_plan = QPushButton("Execute Test Plan")
+        # TEST_EXECUTION 용: Test Case Execution 행 추가/삭제/일괄 편집
         self.btn_add_tc_exec = QPushButton("Add Test Case Execution")
         self.btn_del_tc_exec = QPushButton("Delete Selected")
+        self.btn_edit_tc_exec = QPushButton("Edit Selected...")
+        btn_layout.addWidget(self.btn_execute_plan)
         btn_layout.addWidget(self.btn_add_tc_exec)
         btn_layout.addWidget(self.btn_del_tc_exec)
+        btn_layout.addWidget(self.btn_edit_tc_exec)
         btn_layout.addStretch()
         layout.addLayout(btn_layout)
 
         # 하단: Test Case Executions 테이블
         self.tc_exec_table = QTableWidget()
-        self.tc_exec_table.setColumnCount(8)
+        self.tc_exec_table.setColumnCount(9)
         self.tc_exec_table.setHorizontalHeaderLabels(
-            ["Order", "Test Case ID", "Jira Key", "Summary", "Assignee", "Result", "RTM Env", "Defects"]
+            [
+                "Order",
+                "Test Case ID",
+                "Jira Key",
+                "Summary",
+                "Assignee",
+                "Result",
+                "RTM Env",
+                "Actual Time (min)",
+                "Defects",
+            ]
         )
         self.tc_exec_table.horizontalHeader().setStretchLastSection(True)
         layout.addWidget(self.tc_exec_table)
 
+        self.btn_execute_plan.clicked.connect(self._on_execute_test_plan_clicked)
         self.btn_add_tc_exec.clicked.connect(self._on_add_tc_exec_clicked)
         self.btn_del_tc_exec.clicked.connect(self._on_del_tc_exec_clicked)
+        self.btn_edit_tc_exec.clicked.connect(self._on_edit_tc_exec_clicked)
+
+        # 더블클릭 시 선택된 Test Case Execution 의 Step 실행 상세를 여는 핸들러 연결
+        self.tc_exec_table.cellDoubleClicked.connect(self._on_tc_exec_double_clicked)
+
+        # 필터 변경 시 실시간으로 테이블 필터링
+        self.cmb_te_filter_assignee.currentIndexChanged.connect(self._apply_tc_exec_filters)
+        self.cmb_te_filter_result.currentIndexChanged.connect(self._apply_tc_exec_filters)
+        self.cmb_te_filter_env.currentIndexChanged.connect(self._apply_tc_exec_filters)
 
         self.executions_tab.setLayout(layout)
 
+    # --------------------------- Linked Test Cases (Requirement / Defect 등) -----
+
+    def load_linked_testcases(self, records: List[Dict[str, Any]]):
+        """
+        Relations 정보 등에서 필터링한 Test Case 리스트를 Test Cases 탭에 로드.
+        REQUIREMENT / DEFECT 등의 이슈 타입에서 사용한다.
+        """
+        # REQUIREMENT / DEFECT 용 컬럼 구성
+        self.testplan_tc_table.setColumnCount(6)
+        self.testplan_tc_table.setHorizontalHeaderLabels(
+            ["Jira Key", "Summary", "Priority", "Assignee", "Components", "RTM Env"]
+        )
+        self.testplan_tc_table.setRowCount(0)
+        from PySide6.QtWidgets import QTableWidgetItem
+
+        for rec in records:
+            row = self.testplan_tc_table.rowCount()
+            self.testplan_tc_table.insertRow(row)
+            self.testplan_tc_table.setItem(row, 0, QTableWidgetItem(rec.get("dst_jira_key") or ""))
+            self.testplan_tc_table.setItem(row, 1, QTableWidgetItem(rec.get("dst_summary") or ""))
+            # 아래 필드들은 relations 조회 결과에 아직 없을 수 있으므로 빈 값으로 둔다.
+            # 향후 jira_mapping.extract_relations_from_jira / DB 스키마 확장으로 보강 가능.
+            self.testplan_tc_table.setItem(
+                row, 2, QTableWidgetItem(rec.get("dst_priority") or "")
+            )
+            self.testplan_tc_table.setItem(
+                row, 3, QTableWidgetItem(rec.get("dst_assignee") or "")
+            )
+            self.testplan_tc_table.setItem(
+                row, 4, QTableWidgetItem(rec.get("dst_components") or "")
+            )
+            self.testplan_tc_table.setItem(
+                row, 5, QTableWidgetItem(rec.get("dst_rtm_environment") or "")
+            )
+
     def _on_add_tc_exec_clicked(self):
-        """Test Case Execution 행 추가."""
+        """Test Case Execution 행 추가 (수동으로 한 건 더 추가)."""
         row = self.tc_exec_table.rowCount()
         self.tc_exec_table.insertRow(row)
         self.tc_exec_table.setItem(row, 0, QTableWidgetItem(str(row + 1)))
+
+    def _on_edit_tc_exec_clicked(self):
+        """
+        Test Execution 화면에서 선택된 Test Case Executions 에 대해
+        Assignee / Result / RTM Env / Defects 를 일괄 수정하는 팝업.
+        (실제 DB 반영은 Save Local Issue 시점에 collect_testcase_executions()를 통해 이뤄진다.)
+        """
+        from PySide6.QtWidgets import (
+            QDialog,
+            QVBoxLayout,
+            QFormLayout,
+            QLineEdit,
+            QDialogButtonBox,
+            QLabel,
+        )
+
+        selected = self.tc_exec_table.selectedIndexes()
+        if not selected:
+            return
+        rows = sorted({idx.row() for idx in selected})
+
+        dlg = QDialog(self)
+        dlg.setWindowTitle("Edit Selected Test Case Executions")
+        vbox = QVBoxLayout(dlg)
+        vbox.addWidget(
+            QLabel("Leave a field empty to keep current value. Non-empty fields overwrite all selected rows.")
+        )
+
+        form = QFormLayout()
+        ed_assignee = QLineEdit()
+        ed_result = QLineEdit()
+        ed_env = QLineEdit()
+        ed_actual_time = QLineEdit()
+        ed_defects = QLineEdit()
+        form.addRow("Assignee", ed_assignee)
+        form.addRow("Result", ed_result)
+        form.addRow("RTM Env", ed_env)
+        form.addRow("Actual Time (min)", ed_actual_time)
+        form.addRow("Defects", ed_defects)
+        vbox.addLayout(form)
+
+        btn_box = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
+        vbox.addWidget(btn_box)
+
+        def on_accept():
+            assignee = ed_assignee.text().strip()
+            result = ed_result.text().strip()
+            env = ed_env.text().strip()
+            at_text = ed_actual_time.text().strip()
+            defects = ed_defects.text().strip()
+
+            if not any([assignee, result, env, at_text, defects]):
+                dlg.reject()
+                return
+
+            from PySide6.QtWidgets import QTableWidgetItem
+
+            for r in rows:
+                if assignee:
+                    item = self.tc_exec_table.item(r, 4) or QTableWidgetItem()
+                    item.setText(assignee)
+                    self.tc_exec_table.setItem(r, 4, item)
+                if result:
+                    item = self.tc_exec_table.item(r, 5) or QTableWidgetItem()
+                    item.setText(result)
+                    self.tc_exec_table.setItem(r, 5, item)
+                if env:
+                    item = self.tc_exec_table.item(r, 6) or QTableWidgetItem()
+                    item.setText(env)
+                    self.tc_exec_table.setItem(r, 6, item)
+                if at_text:
+                    item = self.tc_exec_table.item(r, 7) or QTableWidgetItem()
+                    item.setText(at_text)
+                    self.tc_exec_table.setItem(r, 7, item)
+                if defects:
+                    item = self.tc_exec_table.item(r, 8) or QTableWidgetItem()
+                    item.setText(defects)
+                    self.tc_exec_table.setItem(r, 8, item)
+
+            dlg.accept()
+
+        btn_box.accepted.connect(on_accept)
+        btn_box.rejected.connect(dlg.reject)
+
+        dlg.exec()
+
+    def _on_tc_exec_double_clicked(self, row: int, column: int):
+        """
+        Test Case Executions 테이블에서 행을 더블클릭했을 때:
+        - 해당 Test Case 의 설계 Steps + 실행 상태(testcase_step_executions)를 합쳐
+          Step 실행 상세 팝업을 띄운다.
+        """
+        from PySide6.QtWidgets import (
+            QDialog,
+            QVBoxLayout,
+            QHBoxLayout,
+            QTableWidget,
+            QTableWidgetItem,
+            QDialogButtonBox,
+            QLabel,
+            QComboBox,
+        )
+
+        main_win = self.window()
+        if not hasattr(main_win, "conn") or getattr(main_win, "project", None) is None:
+            return
+
+        order_item = self.tc_exec_table.item(row, 0)
+        tcid_item = self.tc_exec_table.item(row, 1)
+        if not order_item or not tcid_item:
+            return
+
+        tce_id = order_item.data(Qt.UserRole)
+        if not tce_id:
+            return
+        try:
+            tce_id = int(tce_id)
+        except (TypeError, ValueError):
+            return
+
+        try:
+            testcase_id = int(tcid_item.text().strip())
+        except (TypeError, ValueError):
+            return
+
+        # 설계 단계 Steps 및 기존 Step Execution 상태 로딩
+        steps = get_steps_for_issue(main_win.conn, testcase_id)
+        existing_execs = get_step_executions_for_tce(main_win.conn, tce_id)
+        exec_map = {
+            int(rec["testcase_step_id"]): rec for rec in existing_execs if rec.get("testcase_step_id") is not None
+        }
+
+        dlg = QDialog(self)
+        dlg.setWindowTitle("Execute Test Case - Steps")
+        vbox = QVBoxLayout(dlg)
+
+        tc_label = self.tc_exec_table.item(row, 3)  # Summary
+        summary_text = tc_label.text() if tc_label else ""
+        vbox.addWidget(QLabel(f"Test Case ID: {testcase_id}  Summary: {summary_text}"))
+
+        # 상단: 일괄 상태 변경 콤보
+        top_layout = QHBoxLayout()
+        top_layout.addWidget(QLabel("Change steps status:"))
+        cmb_status = QComboBox()
+        cmb_status.addItems(
+            [
+                "",
+                "Not run",
+                "In progress",
+                "Pass",
+                "Fail",
+                "Blocked",
+                "Passed with restrictions",
+            ]
+        )
+        btn_apply_all = QPushButton("Apply to all")
+        top_layout.addWidget(cmb_status)
+        top_layout.addWidget(btn_apply_all)
+        top_layout.addStretch()
+        vbox.addLayout(top_layout)
+
+        # Steps 테이블: Group / Order / Action / Input / Expected / Status / Actual Result / Evidence
+        table = QTableWidget()
+        table.setColumnCount(8)
+        table.setHorizontalHeaderLabels(
+            ["Group", "Order", "Action", "Input", "Expected", "Status", "Actual Result", "Evidence"]
+        )
+        table.horizontalHeader().setStretchLastSection(True)
+
+        for s in steps:
+            step_id = s.get("id")
+            row_idx = table.rowCount()
+            table.insertRow(row_idx)
+
+            item_group = QTableWidgetItem(str(s.get("group_no", 1)))
+            item_group.setFlags(item_group.flags() & ~Qt.ItemIsEditable)
+            table.setItem(row_idx, 0, item_group)
+
+            item_order = QTableWidgetItem(str(s.get("order_no", 1)))
+            item_order.setFlags(item_order.flags() & ~Qt.ItemIsEditable)
+            table.setItem(row_idx, 1, item_order)
+
+            item_action = QTableWidgetItem(s.get("action") or "")
+            item_action.setFlags(item_action.flags() & ~Qt.ItemIsEditable)
+            table.setItem(row_idx, 2, item_action)
+
+            item_input = QTableWidgetItem(s.get("input") or "")
+            item_input.setFlags(item_input.flags() & ~Qt.ItemIsEditable)
+            table.setItem(row_idx, 3, item_input)
+
+            item_expected = QTableWidgetItem(s.get("expected") or "")
+            item_expected.setFlags(item_expected.flags() & ~Qt.ItemIsEditable)
+            table.setItem(row_idx, 4, item_expected)
+
+            # 기존 실행 상태
+            exec_rec = exec_map.get(int(step_id)) if step_id is not None else None
+            status_val = exec_rec.get("status") if exec_rec else ""
+            actual_val = exec_rec.get("actual_result") if exec_rec else ""
+            evidence_val = exec_rec.get("evidence") if exec_rec else ""
+
+            item_status = QTableWidgetItem(status_val or "")
+            table.setItem(row_idx, 5, item_status)
+            item_actual = QTableWidgetItem(actual_val or "")
+            table.setItem(row_idx, 6, item_actual)
+            item_evidence = QTableWidgetItem(evidence_val or "")
+            table.setItem(row_idx, 7, item_evidence)
+
+            # 숨은 데이터로 testcase_step_id 저장
+            item_group.setData(Qt.UserRole, step_id)
+
+        vbox.addWidget(table)
+
+        # 일괄 상태 적용 버튼 로직
+        def apply_all_status():
+            val = cmb_status.currentText().strip()
+            if not val:
+                return
+            for r in range(table.rowCount()):
+                item = table.item(r, 5)
+                if item is None:
+                    item = QTableWidgetItem()
+                    table.setItem(r, 5, item)
+                item.setText(val)
+
+        btn_apply_all.clicked.connect(apply_all_status)
+
+        btn_box = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
+        vbox.addWidget(btn_box)
+
+        def on_accept():
+            records: list[Dict[str, Any]] = []
+            for r in range(table.rowCount()):
+                item_group = table.item(r, 0)
+                step_id = item_group.data(Qt.UserRole) if item_group else None
+                if not step_id:
+                    continue
+                status_item = table.item(r, 5)
+                actual_item = table.item(r, 6)
+                evidence_item = table.item(r, 7)
+                records.append(
+                    {
+                        "testcase_step_id": int(step_id),
+                        "status": status_item.text().strip() if status_item else "",
+                        "actual_result": actual_item.text().strip() if actual_item else "",
+                        "evidence": evidence_item.text().strip() if evidence_item else "",
+                    }
+                )
+
+            replace_step_executions_for_tce(main_win.conn, tce_id, records)
+            dlg.accept()
+
+        btn_box.accepted.connect(on_accept)
+        btn_box.rejected.connect(dlg.reject)
+
+        dlg.exec()
+
+    def _on_execute_test_plan_clicked(self):
+        """
+        TEST_PLAN 이슈의 Executions 탭에서 'Execute Test Plan' 버튼:
+        - 현재 Test Plan 을 기반으로 새로운 TEST_EXECUTION 이슈를 생성하고,
+        - 해당 플랜에 연결된 모든 Test Case 에 대한 Test Case Execution 행을 초기화한다.
+        """
+        main_win = self.window()
+        if not hasattr(main_win, "conn") or getattr(main_win, "project", None) is None:
+            return
+        if getattr(main_win, "current_issue_id", None) is None:
+            main_win.status_bar.showMessage("No Test Plan selected.")
+            return
+
+        # 현재 이슈가 TEST_PLAN 인지 확인
+        plan_issue = get_issue_by_id(main_win.conn, main_win.current_issue_id)
+        if not plan_issue or (plan_issue.get("issue_type") or "").upper() != "TEST_PLAN":
+            main_win.status_bar.showMessage("Current issue is not a TEST_PLAN.")
+            return
+
+        # 이 Test Plan 에 연결된 Test Case 목록
+        tp_records = get_testplan_testcases(main_win.conn, int(main_win.current_issue_id))
+        if not tp_records:
+            main_win.status_bar.showMessage("This Test Plan has no Test Cases mapped.")
+            return
+
+        # TEST_EXECUTION 로컬 이슈 생성
+        folder_id = plan_issue.get("folder_id")
+        summary = f"{plan_issue.get('summary') or 'Test Plan'} (execution)"
+        te_issue_id = create_local_issue(
+            main_win.conn,
+            project_id=main_win.project.id,
+            issue_type="TEST_EXECUTION",
+            folder_id=folder_id,
+            summary=summary,
+        )
+
+        # Details 필드 일부를 플랜에서 복사 (환경/우선순위/라벨 등)
+        fields: Dict[str, Any] = {}
+        for key in ["rtm_environment", "priority", "assignee", "labels", "components"]:
+            val = plan_issue.get(key)
+            if val:
+                fields[key] = val
+        # parent_issue_id 로 플랜과의 연결을 남겨둔다.
+        fields["parent_issue_id"] = int(main_win.current_issue_id)
+        update_issue_fields(main_win.conn, te_issue_id, fields)
+
+        # testexecutions 메타 행 초기화
+        te_row = get_or_create_testexecution_for_issue(main_win.conn, te_issue_id)
+        te_meta: Dict[str, Any] = {}
+        if plan_issue.get("rtm_environment"):
+            te_meta["environment"] = plan_issue.get("rtm_environment") or ""
+        update_testexecution_for_issue(main_win.conn, te_issue_id, te_meta)
+
+        # testcase_executions 행 생성 (각 Test Case 에 대해 기본 행)
+        records: list[Dict[str, Any]] = []
+        for idx, rec in enumerate(tp_records, start=1):
+            tc_id = rec.get("testcase_id")
+            if not tc_id:
+                continue
+            records.append(
+                {
+                    "testcase_id": int(tc_id),
+                    "order_no": int(rec.get("order_no", idx) or idx),
+                    "assignee": "",
+                    "result": "",
+                    "rtm_environment": plan_issue.get("rtm_environment") or "",
+                    "defects": "",
+                }
+            )
+        replace_testcase_executions(main_win.conn, te_row["id"], records)
+
+        # 트리/상태 갱신: 새 Test Execution 은 상단 'Test Executions' 탭에서 확인 가능
+        main_win.reload_local_tree()
+        main_win.status_bar.showMessage(
+            f"Created new Test Execution (id={te_issue_id}) for this Test Plan."
+        )
 
     def _on_del_tc_exec_clicked(self):
         """선택된 Test Case Execution 행 삭제 및 order 재정렬."""
@@ -825,27 +1966,86 @@ class IssueTabWidget(QTabWidget):
             self.ed_te_env.setText("")
             self.ed_te_start.setText("")
             self.ed_te_end.setText("")
-            self.ed_te_result.setText("")
+            self.cmb_te_result.setCurrentIndex(0)
             self.ed_te_executed_by.setText("")
         else:
             self.ed_te_env.setText(meta.get("environment") or "")
             self.ed_te_start.setText(meta.get("start_date") or "")
             self.ed_te_end.setText(meta.get("end_date") or "")
-            self.ed_te_result.setText(meta.get("result") or "")
+            result_val = meta.get("result") or ""
+            # 콤보박스에서 동일 텍스트를 찾고, 없으면 첫 번째 항목("")로 설정
+            idx = self.cmb_te_result.findText(result_val)
+            if idx < 0:
+                idx = 0
+            self.cmb_te_result.setCurrentIndex(idx)
             self.ed_te_executed_by.setText(meta.get("executed_by") or "")
 
         self.tc_exec_table.setRowCount(0)
+        assignees: set[str] = set()
+        results: set[str] = set()
+        envs: set[str] = set()
+
         for rec in tc_execs:
             row = self.tc_exec_table.rowCount()
             self.tc_exec_table.insertRow(row)
-            self.tc_exec_table.setItem(row, 0, QTableWidgetItem(str(rec.get("order_no", row + 1))))
+            item_order = QTableWidgetItem(str(rec.get("order_no", row + 1)))
+            # UserRole 에 testcase_executions.id 저장 (Step 실행 상세에 사용)
+            item_order.setData(Qt.UserRole, rec.get("id"))
+            self.tc_exec_table.setItem(row, 0, item_order)
             self.tc_exec_table.setItem(row, 1, QTableWidgetItem(str(rec.get("testcase_id"))))
             self.tc_exec_table.setItem(row, 2, QTableWidgetItem(rec.get("jira_key") or ""))
             self.tc_exec_table.setItem(row, 3, QTableWidgetItem(rec.get("summary") or ""))
-            self.tc_exec_table.setItem(row, 4, QTableWidgetItem(rec.get("assignee") or ""))
-            self.tc_exec_table.setItem(row, 5, QTableWidgetItem(rec.get("result") or ""))
-            self.tc_exec_table.setItem(row, 6, QTableWidgetItem(rec.get("rtm_environment") or ""))
-            self.tc_exec_table.setItem(row, 7, QTableWidgetItem(rec.get("defects") or ""))
+            assignee_val = rec.get("assignee") or ""
+            result_val = rec.get("result") or ""
+            env_val = rec.get("rtm_environment") or ""
+            self.tc_exec_table.setItem(row, 4, QTableWidgetItem(assignee_val))
+            self.tc_exec_table.setItem(row, 5, QTableWidgetItem(result_val))
+            self.tc_exec_table.setItem(row, 6, QTableWidgetItem(env_val))
+            at = rec.get("actual_time")
+            at_text = "" if at in (None, "") else str(at)
+            self.tc_exec_table.setItem(row, 7, QTableWidgetItem(at_text))
+            self.tc_exec_table.setItem(row, 8, QTableWidgetItem(rec.get("defects") or ""))
+
+            if assignee_val:
+                assignees.add(assignee_val)
+            if result_val:
+                results.add(result_val)
+            if env_val:
+                envs.add(env_val)
+
+        # 대시보드: 실행된 Test Case 수/전체/퍼센트 표시
+        total = len(tc_execs)
+        executed = 0
+        for rec in tc_execs:
+            if (rec.get("result") or "").strip():
+                executed += 1
+        if total > 0:
+            pct = executed * 100.0 / total
+            self.lbl_te_executed.setText(f"TE executed: {executed}/{total} ({pct:.1f}%)")
+        else:
+            self.lbl_te_executed.setText("TE executed: 0/0 (0%)")
+
+        # 필터 콤보박스 갱신 (첫 항목은 항상 'All')
+        def _fill_filter_combo(combo: QComboBox, values: set[str]):
+            current = combo.currentText() if combo.count() > 0 else "All"
+            combo.blockSignals(True)
+            combo.clear()
+            combo.addItem("All")
+            for v in sorted(values):
+                combo.addItem(v)
+            # 이전 선택이 여전히 유효하면 그대로 유지
+            idx = combo.findText(current)
+            if idx < 0:
+                idx = 0
+            combo.setCurrentIndex(idx)
+            combo.blockSignals(False)
+
+        _fill_filter_combo(self.cmb_te_filter_assignee, assignees)
+        _fill_filter_combo(self.cmb_te_filter_result, results)
+        _fill_filter_combo(self.cmb_te_filter_env, envs)
+
+        # 필터 적용
+        self._apply_tc_exec_filters()
 
     def collect_testexecution_meta(self) -> Dict[str, Any]:
         """현재 탭의 Test Execution 메타 정보 수집."""
@@ -853,7 +2053,7 @@ class IssueTabWidget(QTabWidget):
             "environment": self.ed_te_env.text().strip(),
             "start_date": self.ed_te_start.text().strip(),
             "end_date": self.ed_te_end.text().strip(),
-            "result": self.ed_te_result.text().strip(),
+            "result": self.cmb_te_result.currentText().strip(),
             "executed_by": self.ed_te_executed_by.text().strip(),
         }
 
@@ -867,7 +2067,8 @@ class IssueTabWidget(QTabWidget):
             assignee_item = self.tc_exec_table.item(r, 4)
             result_item = self.tc_exec_table.item(r, 5)
             env_item = self.tc_exec_table.item(r, 6)
-            defects_item = self.tc_exec_table.item(r, 7)
+            at_item = self.tc_exec_table.item(r, 7)
+            defects_item = self.tc_exec_table.item(r, 8)
             try:
                 order_no = int(order_item.text()) if order_item and order_item.text().strip() else r + 1
             except ValueError:
@@ -878,17 +2079,70 @@ class IssueTabWidget(QTabWidget):
                 testcase_id = int(tcid_item.text().strip())
             except ValueError:
                 continue
+            actual_time = 0
+            if at_item and at_item.text().strip():
+                try:
+                    actual_time = int(at_item.text().strip())
+                except ValueError:
+                    actual_time = 0
             records.append(
                 {
                     "order_no": order_no,
                     "testcase_id": testcase_id,
                     "assignee": assignee_item.text().strip() if assignee_item else "",
                     "result": result_item.text().strip() if result_item else "",
+                    "actual_time": actual_time,
                     "rtm_environment": env_item.text().strip() if env_item else "",
                     "defects": defects_item.text().strip() if defects_item else "",
                 }
             )
         return records
+
+    def _apply_tc_exec_filters(self):
+        """
+        상단 필터(Assignee / Result / RTM Env)에 따라 Test Case Executions 테이블을 필터링한다.
+        """
+        if not hasattr(self, "tc_exec_table"):
+            return
+
+        assignee = (
+            self.cmb_te_filter_assignee.currentText()
+            if hasattr(self, "cmb_te_filter_assignee")
+            else "All"
+        )
+        result = (
+            self.cmb_te_filter_result.currentText()
+            if hasattr(self, "cmb_te_filter_result")
+            else "All"
+        )
+        env = (
+            self.cmb_te_filter_env.currentText()
+            if hasattr(self, "cmb_te_filter_env")
+            else "All"
+        )
+
+        assignee = assignee if assignee != "All" else ""
+        result = result if result != "All" else ""
+        env = env if env != "All" else ""
+
+        rows = self.tc_exec_table.rowCount()
+        for r in range(rows):
+            a_item = self.tc_exec_table.item(r, 4)
+            res_item = self.tc_exec_table.item(r, 5)
+            env_item = self.tc_exec_table.item(r, 6)
+            a_txt = a_item.text().strip() if a_item else ""
+            res_txt = res_item.text().strip() if res_item else ""
+            env_txt = env_item.text().strip() if env_item else ""
+
+            visible = True
+            if assignee and a_txt != assignee:
+                visible = False
+            if result and res_txt != result:
+                visible = False
+            if env and env_txt != env:
+                visible = False
+
+            self.tc_exec_table.setRowHidden(r, not visible)
 
     def _init_defects_tab(self):
         layout = QVBoxLayout()
@@ -969,6 +2223,86 @@ class IssueTabWidget(QTabWidget):
         if "details" in visible:
             self.setCurrentWidget(self.details_tab)
 
+        # Test Cases 탭은 이슈 타입에 따라 헤더/버튼/컬럼 구성을 달리한다.
+        if "testcases" in visible and hasattr(self, "configure_testcases_tab_for_issue_type"):
+            self.configure_testcases_tab_for_issue_type(it)
+
+        # Executions 탭도 TEST_PLAN / TEST_EXECUTION 에 따라 다르게 구성한다.
+        if "executions" in visible and hasattr(self, "configure_executions_tab_for_issue_type"):
+            self.configure_executions_tab_for_issue_type(it)
+
+    def configure_testcases_tab_for_issue_type(self, issue_type: str) -> None:
+        """
+        Test Cases 탭을 이슈 타입에 맞게 구성한다.
+        - REQUIREMENT / DEFECT: Linked Test Cases 뷰 (Cover by Test Case / Create New Test Case)
+        - TEST_PLAN: Test Plan - Test Case 매핑 테이블
+        """
+        it = issue_type.upper()
+
+        if it == "TEST_PLAN":
+            # 헤더 텍스트
+            self.lbl_testcases_header.setText("Test Plan - Test Cases")
+            # 버튼 표시 (Add / Create / Delete / Edit order)
+            self.btn_cover_by_tc.setVisible(False)
+            self.btn_create_tc.setVisible(True)
+            self.btn_add_tp_tc.setVisible(True)
+            self.btn_del_tp_tc.setVisible(True)
+            self.btn_edit_tp_order.setVisible(True)
+            # 컬럼 구성은 load_testplan_testcases 에서 보장
+        elif it == "TEST_CASE":
+            # 순수 Test Case 이슈에서는 상단 헤더만 간단히 두고,
+            # 실제 생성/관리는 좌측 패널의 'Create Test Case' 버튼을 사용하도록 한다.
+            self.lbl_testcases_header.setText("Test Cases")
+            self.btn_cover_by_tc.setVisible(False)
+            self.btn_create_tc.setVisible(False)
+            self.btn_add_tp_tc.setVisible(False)
+            self.btn_del_tp_tc.setVisible(False)
+            self.btn_edit_tp_order.setVisible(False)
+        else:
+            # REQUIREMENT / DEFECT 등: Linked Test Cases
+            self.lbl_testcases_header.setText("Linked Test Cases (covered by / related test cases)")
+            self.btn_cover_by_tc.setVisible(True)
+            self.btn_create_tc.setVisible(True)
+            self.btn_add_tp_tc.setVisible(False)
+            self.btn_del_tp_tc.setVisible(False)
+            self.btn_edit_tp_order.setVisible(False)
+            # 컬럼 구성은 load_linked_testcases 에서 보장
+
+    def configure_executions_tab_for_issue_type(self, issue_type: str) -> None:
+        """
+        Executions 탭을 이슈 타입에 맞게 구성한다.
+        - TEST_PLAN      : 'Execute Test Plan' 버튼 중심의 뷰 (이 플랜에서 생성된 실행들을 관리)
+        - TEST_EXECUTION : Test Case Executions 편집 뷰
+        """
+        it = issue_type.upper()
+
+        if it == "TEST_PLAN":
+            # 헤더/버튼 구성
+            self.lbl_exec_header.setText("Executions for this Test Plan")
+            # Test Plan 에서는 실제 실행(Execute Test Plan) 버튼만 보이게 하고
+            # 개별 Test Case Execution 편집용 UI는 숨긴다.
+            self.btn_execute_plan.setVisible(True)
+            self.btn_add_tc_exec.setVisible(False)
+            self.btn_del_tc_exec.setVisible(False)
+            self.btn_edit_tc_exec.setVisible(False)
+            self.tc_exec_table.setVisible(False)
+        elif it == "TEST_EXECUTION":
+            # Test Execution 상세/TC Executions 편집
+            self.lbl_exec_header.setText("Test Case Executions")
+            self.btn_execute_plan.setVisible(False)
+            self.btn_add_tc_exec.setVisible(True)
+            self.btn_del_tc_exec.setVisible(True)
+            self.btn_edit_tc_exec.setVisible(True)
+            self.tc_exec_table.setVisible(True)
+        else:
+            # 기타 타입에서는 Executions 탭을 단순 비활성화 수준으로 둔다.
+            self.lbl_exec_header.setText("Executions")
+            self.btn_execute_plan.setVisible(False)
+            self.btn_add_tc_exec.setVisible(False)
+            self.btn_del_tc_exec.setVisible(False)
+            self.btn_edit_tc_exec.setVisible(False)
+            self.tc_exec_table.setVisible(False)
+
     def set_issue(self, issue: Dict[str, Any] | None) -> None:
         """
         현재 선택된 이슈의 필드를 Details 탭에 로드하고,
@@ -989,6 +2323,7 @@ class IssueTabWidget(QTabWidget):
         if not issue:
             self.ed_local_id.setText("")
             self.ed_jira_key.setText("")
+            self.ed_issue_type.setText("")
             self.ed_summary.setText("")
             self.ed_status.setText("")
             self.ed_priority.setText("")
@@ -1005,11 +2340,15 @@ class IssueTabWidget(QTabWidget):
             self.ed_updated.setText("")
             self.ed_attachments.setText("")
             self.txt_description.setPlainText("")
+            # Activity 초기화
+            if hasattr(self, "set_activity_text"):
+                self.set_activity_text("")
             # Preconditions (TEST_CASE용) 초기화
             if hasattr(self, "set_preconditions_text"):
                 self.set_preconditions_text("")
             return
 
+        self.ed_issue_type.setText(issue_type or "")
         self.ed_summary.setText(issue.get("summary") or "")
         self.ed_status.setText(issue.get("status") or "")
         self.ed_priority.setText(issue.get("priority") or "")
@@ -1034,6 +2373,10 @@ class IssueTabWidget(QTabWidget):
         pre = issue.get("preconditions") or ""
         if hasattr(self, "set_preconditions_text"):
             self.set_preconditions_text(pre)
+
+    def set_activity_text(self, text: str) -> None:
+        """JIRA Comments/History 텍스트를 Activity 영역에 설정."""
+        self.txt_activity.setPlainText(text or "")
 
     def get_issue_updates(self) -> Dict[str, Any]:
         """
@@ -1102,6 +2445,19 @@ class PanelWidget(QWidget):
             header_layout.addWidget(self.btn_new_issue)
             header_layout.addWidget(self.btn_save_issue)
             header_layout.addWidget(self.btn_delete_issue)
+
+            # Test Case 전용 상단 액션(이미지: Create Test Case / Execute / Add to Test Plan / Link to requirement)
+            # - 기본적으로는 숨겨 두고, 상단 이슈 타입 탭이 TEST_CASE 일 때만 표시/활성화한다.
+            self.btn_execute_tc = QPushButton("Execute")
+            self.btn_add_to_testplan = QPushButton("Add to Test Plan")
+            self.btn_link_requirement = QPushButton("Link to Requirement")
+            # 일단 비활성/비가시 상태로 시작; MainWindow._on_issue_type_tab_changed 에서 제어
+            self.btn_execute_tc.setVisible(False)
+            self.btn_add_to_testplan.setVisible(False)
+            self.btn_link_requirement.setVisible(False)
+            header_layout.addWidget(self.btn_execute_tc)
+            header_layout.addWidget(self.btn_add_to_testplan)
+            header_layout.addWidget(self.btn_link_requirement)
 
             self.btn_sync_up = QPushButton("Sync → JIRA")
             header_layout.addWidget(self.btn_sync_up)
@@ -1312,6 +2668,269 @@ class MainWindow(QMainWindow):
             4: "DEFECT",
         }
         self.tree_issue_type_filter = mapping.get(index)
+
+        # 로컬 패널 헤더의 버튼 텍스트/표시를 이슈 타입에 맞게 조정
+        if self.left_panel and hasattr(self.left_panel, "btn_new_issue"):
+            it = self.tree_issue_type_filter or ""
+            text_map = {
+                "REQUIREMENT": "Create Requirement",
+                "TEST_CASE": "Create Test Case",
+                "TEST_PLAN": "Create Test Plan",
+                "TEST_EXECUTION": "Create Test Execution",
+                "DEFECT": "Create Defect",
+            }
+            self.left_panel.btn_new_issue.setText(text_map.get(it, "New Issue"))
+
+            # Test Case 상단 액션(Execute / Add to Test Plan / Link to Requirement)은
+            # TEST_CASE 탭에서만 표시
+            is_tc = it == "TEST_CASE"
+            self.left_panel.btn_execute_tc.setVisible(is_tc)
+            self.left_panel.btn_add_to_testplan.setVisible(is_tc)
+            self.left_panel.btn_link_requirement.setVisible(is_tc)
+
+        # 이슈 타입 탭 변경 시, 좌/우 트리를 새 필터에 맞게 다시 로드
+        self.reload_local_tree()
+        if self.jira_available:
+            try:
+                self.on_refresh_online_tree()
+            except Exception:
+                # 온라인 트리 로딩 실패는 치명적이지 않으므로 무시
+                pass
+
+    # ------------------------------------------------------------------ Test Cases top-level actions (MainWindow)
+
+    def _selected_local_testcase_ids(self) -> list[int]:
+        """
+        좌측(Local) 트리에서 선택된 TEST_CASE 이슈들의 로컬 ID 리스트를 반환.
+        상단 탭이 Test Cases 일 때 Add to Test Plan / Link to Requirement 에서 사용한다.
+        """
+        ids: list[int] = []
+        view = self.left_panel.tree_view
+        model = view.model()
+        if model is None:
+            return ids
+        for idx in view.selectedIndexes():
+            if idx.column() != 0:
+                continue
+            item = model.itemFromIndex(idx)
+            if not item:
+                continue
+            node_type = item.data(Qt.UserRole)
+            if node_type != "ISSUE":
+                continue
+            issue_id = item.data(Qt.UserRole + 1)
+            issue_type = (item.data(Qt.UserRole + 3) or "").upper()
+            if not issue_id or issue_type != "TEST_CASE":
+                continue
+            try:
+                ids.append(int(issue_id))
+            except (TypeError, ValueError):
+                continue
+        return ids
+
+    def on_add_testcases_to_testplan_clicked(self) -> None:
+        """
+        상단 Test Cases 탭에서 'Add to Test Plan' 버튼:
+        - 트리에서 선택된 TEST_CASE 이슈들을 하나의 Test Plan 에 추가한다.
+        """
+        tc_ids = self._selected_local_testcase_ids()
+        if not tc_ids:
+            self.status_bar.showMessage("No Test Cases selected in the tree.")
+            return
+
+        # 프로젝트 내 TEST_PLAN 목록 조회
+        cur = self.conn.cursor()
+        cur.execute(
+            """
+            SELECT id, jira_key, summary
+              FROM issues
+             WHERE project_id = ? AND is_deleted = 0 AND UPPER(issue_type) = 'TEST_PLAN'
+             ORDER BY jira_key, summary
+            """,
+            (self.project.id,),
+        )
+        rows = cur.fetchall()
+        plans = [dict(r) for r in rows]
+        if not plans:
+            self.status_bar.showMessage("No TEST_PLAN issues found; cannot add Test Cases.")
+            return
+
+        from PySide6.QtWidgets import (
+            QDialog,
+            QVBoxLayout,
+            QDialogButtonBox,
+            QListWidget,
+            QListWidgetItem,
+            QLabel,
+        )
+
+        dlg = QDialog(self)
+        dlg.setWindowTitle("Add to Test Plan")
+        vbox = QVBoxLayout(dlg)
+        vbox.addWidget(QLabel("Select a Test Plan to add the selected Test Cases:"))
+
+        lst = QListWidget()
+        for p in plans:
+            key = p.get("jira_key") or f"ID={p.get('id')}"
+            text = key
+            if p.get("summary"):
+                text += f" - {p.get('summary')}"
+            item = QListWidgetItem(text)
+            item.setData(Qt.UserRole, p.get("id"))
+            lst.addItem(item)
+        vbox.addWidget(lst)
+
+        btn_box = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
+        vbox.addWidget(btn_box)
+
+        def on_accept():
+            item = lst.currentItem()
+            if not item:
+                self.status_bar.showMessage("No Test Plan selected.")
+                return
+            tp_id = item.data(Qt.UserRole)
+            if not tp_id:
+                return
+
+            # 기존 매핑을 읽고 선택된 Test Case 들을 추가
+            existing = get_testplan_testcases(self.conn, int(tp_id))
+            existing_tc_ids = {
+                int(r.get("testcase_id")) for r in existing if r.get("testcase_id")
+            }
+            records = [
+                {"testcase_id": int(r["testcase_id"]), "order_no": int(r.get("order_no", 0) or 0)}
+                for r in existing
+            ]
+
+            for tc_id in tc_ids:
+                if tc_id in existing_tc_ids:
+                    continue
+                records.append({"testcase_id": tc_id, "order_no": 0})
+
+            # order_no 재정렬
+            for idx, rec in enumerate(records, start=1):
+                rec["order_no"] = idx
+
+            replace_testplan_testcases(self.conn, int(tp_id), records)
+            self.status_bar.showMessage(
+                f"Added {len(tc_ids)} Test Case(s) to Test Plan (id={tp_id})."
+            )
+            dlg.accept()
+
+        btn_box.accepted.connect(on_accept)
+        btn_box.rejected.connect(dlg.reject)
+
+        dlg.exec()
+
+    def on_link_testcases_to_requirement_clicked(self) -> None:
+        """
+        상단 Test Cases 탭에서 'Link to Requirement' 버튼:
+        - 트리에서 선택된 TEST_CASE 이슈들을 선택한 Requirement 와 relation 으로 연결한다.
+        """
+        tc_ids = self._selected_local_testcase_ids()
+        if not tc_ids:
+            self.status_bar.showMessage("No Test Cases selected in the tree.")
+            return
+
+        # 프로젝트 내 REQUIREMENT 목록 조회
+        cur = self.conn.cursor()
+        cur.execute(
+            """
+            SELECT id, jira_key, summary
+              FROM issues
+             WHERE project_id = ? AND is_deleted = 0 AND UPPER(issue_type) = 'REQUIREMENT'
+             ORDER BY jira_key, summary
+            """,
+            (self.project.id,),
+        )
+        rows = cur.fetchall()
+        reqs = [dict(r) for r in rows]
+        if not reqs:
+            self.status_bar.showMessage("No REQUIREMENT issues found; cannot link.")
+            return
+
+        from PySide6.QtWidgets import (
+            QDialog,
+            QVBoxLayout,
+            QDialogButtonBox,
+            QListWidget,
+            QListWidgetItem,
+            QLabel,
+        )
+
+        dlg = QDialog(self)
+        dlg.setWindowTitle("Link to Requirement")
+        vbox = QVBoxLayout(dlg)
+        vbox.addWidget(QLabel("Select a Requirement to link the selected Test Cases:"))
+
+        lst = QListWidget()
+        for r in reqs:
+            key = r.get("jira_key") or f"ID={r.get('id')}"
+            text = key
+            if r.get("summary"):
+                text += f" - {r.get('summary')}"
+            item = QListWidgetItem(text)
+            item.setData(Qt.UserRole, r.get("id"))
+            lst.addItem(item)
+        vbox.addWidget(lst)
+
+        btn_box = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
+        vbox.addWidget(btn_box)
+
+        def on_accept():
+            item = lst.currentItem()
+            if not item:
+                self.status_bar.showMessage("No Requirement selected.")
+                return
+            req_id = item.data(Qt.UserRole)
+            if not req_id:
+                return
+
+            # Requirement 를 src 로 하는 relations 를 읽고, 선택된 Test Case 들을 추가
+            existing_rels = get_relations_for_issue(self.conn, int(req_id))
+            existing_dst_ids = {
+                int(r.get("dst_issue_id")) for r in existing_rels if r.get("dst_issue_id")
+            }
+            new_rels = [
+                {"dst_issue_id": r.get("dst_issue_id"), "relation_type": r.get("relation_type") or ""}
+                for r in existing_rels
+            ]
+            for tc_id in tc_ids:
+                if tc_id in existing_dst_ids:
+                    continue
+                new_rels.append({"dst_issue_id": tc_id, "relation_type": "Tests"})
+
+            replace_relations_for_issue(self.conn, int(req_id), new_rels)
+
+            # 현재 선택 이슈가 이 Requirement 인 경우, Relations / Requirements / Linked Test Cases 갱신
+            if self.current_issue_id == int(req_id):
+                rels = get_relations_for_issue(self.conn, int(req_id))
+                if hasattr(self.left_panel.issue_tabs, "load_relations"):
+                    self.left_panel.issue_tabs.load_relations(rels)
+                if hasattr(self.left_panel.issue_tabs, "load_requirements"):
+                    reqs2 = [
+                        r
+                        for r in rels
+                        if (r.get("dst_issue_type") or "").upper() == "REQUIREMENT"
+                    ]
+                    self.left_panel.issue_tabs.load_requirements(reqs2)
+                if hasattr(self.left_panel.issue_tabs, "load_linked_testcases"):
+                    tcs2 = [
+                        r
+                        for r in rels
+                        if (r.get("dst_issue_type") or "").upper() == "TEST_CASE"
+                    ]
+                    self.left_panel.issue_tabs.load_linked_testcases(tcs2)
+
+            self.status_bar.showMessage(
+                f"Linked {len(tc_ids)} Test Case(s) to Requirement (id={req_id})."
+            )
+            dlg.accept()
+
+        btn_box.accepted.connect(on_accept)
+        btn_box.rejected.connect(dlg.reject)
+
+        dlg.exec()
 
         # 로컬/온라인 트리를 현재 필터에 맞게 다시 로드
         self.reload_local_tree()
@@ -1711,6 +3330,10 @@ class MainWindow(QMainWindow):
             if hasattr(tabs, "load_requirements"):
                 reqs = [r for r in rels if (r.get("dst_issue_type") or "").upper() == "REQUIREMENT"]
                 tabs.load_requirements(reqs)
+            # Test Cases 탭: relations 중 TEST_CASE 타입만 필터링 (REQUIREMENT / DEFECT 등에서 사용)
+            if hasattr(tabs, "load_linked_testcases"):
+                tcs = [r for r in rels if (r.get("dst_issue_type") or "").upper() == "TEST_CASE"]
+                tabs.load_linked_testcases(tcs)
         except Exception as e_rel:
             print(f"[WARN] Failed to load local relations: {e_rel}")
 
@@ -2142,6 +3765,11 @@ class MainWindow(QMainWindow):
         self.left_panel.btn_new_issue.clicked.connect(self.on_new_local_issue_clicked)
         self.left_panel.btn_delete_issue.clicked.connect(self.on_delete_local_issue_clicked)
         self.left_panel.btn_save_issue.clicked.connect(self.on_save_issue_clicked)
+        # Test Case 상단 액션들
+        self.left_panel.btn_add_to_testplan.clicked.connect(self.on_add_testcases_to_testplan_clicked)
+        self.left_panel.btn_link_requirement.clicked.connect(self.on_link_testcases_to_requirement_clicked)
+        # Execute 버튼은 향후 Test Execution 흐름과 연계 (현재는 비활성화하거나 후속 구현 예정)
+        # self.left_panel.btn_execute_tc.clicked.connect(self.on_execute_testcases_clicked)
 
         # Local / Online 트리 컨텍스트 메뉴 (우클릭)
         self.left_panel.tree_view.setContextMenuPolicy(Qt.CustomContextMenu)
@@ -2154,6 +3782,15 @@ class MainWindow(QMainWindow):
         QShortcut(QKeySequence("Ctrl+S"), self, activated=self.on_save_issue_clicked)
         QShortcut(QKeySequence("F5"), self, activated=self.on_full_sync_clicked)
         QShortcut(QKeySequence("Ctrl+I"), self, activated=self.on_import_excel_clicked)
+
+        # Details 탭 Activity 새로고침 버튼
+        try:
+            self.left_panel.issue_tabs.btn_refresh_activity.clicked.connect(
+                self.on_refresh_activity_clicked
+            )
+        except Exception:
+            # 방어적: 위젯 초기화 순서 문제가 있을 경우를 대비
+            pass
 
 
         # --------------------------------------------------------------------- Excel import/export
@@ -2209,6 +3846,90 @@ class MainWindow(QMainWindow):
         except Exception as e:
             self.status_bar.showMessage(f"Excel import failed: {e}")
             print(f"[ERROR] Excel import failed: {e}")
+
+    def on_refresh_activity_clicked(self):
+        """
+        현재 선택된 이슈의 JIRA Comments / History 를 조회하여 Details 탭 Activity 영역에 표시.
+        - jira_key 가 없는 로컬 전용 이슈이거나, JIRA 클라이언트가 없으면 메시지 표시만 수행.
+        """
+        if not self.jira_available or not self.jira_client:
+            self.status_bar.showMessage("JIRA is offline; cannot load activity.")
+            return
+
+        if self.current_issue_id is None:
+            self.status_bar.showMessage("No issue selected; cannot load activity.")
+            return
+
+        issue = get_issue_by_id(self.conn, self.current_issue_id)
+        if not issue:
+            self.status_bar.showMessage("Issue not found in local DB; cannot load activity.")
+            return
+
+        jira_key = issue.get("jira_key")
+        if not jira_key:
+            self.status_bar.showMessage("Selected issue has no JIRA Key; no remote activity.")
+            return
+
+        try:
+            self.status_bar.showMessage(f"Loading activity from JIRA for {jira_key}...")
+            QApplication.setOverrideCursor(Qt.WaitCursor)
+
+            data = self.jira_client.get_jira_issue(jira_key, expand="comments,changelog")
+
+            # Comments
+            activity_lines: list[str] = []
+            fields = data.get("fields", {})
+            comments = None
+            comment_container = fields.get("comment")
+            if isinstance(comment_container, dict):
+                comments = comment_container.get("comments")
+            if isinstance(comments, list):
+                activity_lines.append("=== Comments ===")
+                for c in comments:
+                    author = (
+                        c.get("author", {}).get("displayName")
+                        if isinstance(c.get("author"), dict)
+                        else ""
+                    )
+                    created = c.get("created", "")
+                    body = c.get("body", "")
+                    activity_lines.append(f"- [{created}] {author}:")
+                    activity_lines.append(str(body))
+                    activity_lines.append("")
+
+            # Changelog (History)
+            changelog = data.get("changelog", {})
+            histories = changelog.get("histories") if isinstance(changelog, dict) else None
+            if isinstance(histories, list) and histories:
+                activity_lines.append("=== History ===")
+                for h in histories:
+                    author = (
+                        h.get("author", {}).get("displayName")
+                        if isinstance(h.get("author"), dict)
+                        else ""
+                    )
+                    created = h.get("created", "")
+                    items = h.get("items") or []
+                    activity_lines.append(f"- [{created}] {author}")
+                    for it in items:
+                        field = it.get("field", "")
+                        from_val = it.get("fromString", "")
+                        to_val = it.get("toString", "")
+                        activity_lines.append(f"    {field}: '{from_val}' → '{to_val}'")
+                    activity_lines.append("")
+
+            if not activity_lines:
+                activity_text = "No comments or history found for this issue."
+            else:
+                activity_text = "\n".join(activity_lines)
+
+            self.left_panel.issue_tabs.set_activity_text(activity_text)
+            self.status_bar.showMessage(f"Loaded activity from JIRA for {jira_key}")
+        except Exception as e:
+            self.status_bar.showMessage(f"Failed to load activity: {e}")
+            print(f"[ERROR] Failed to load activity for {jira_key}: {e}")
+        finally:
+            QApplication.restoreOverrideCursor()
 
     # --------------------------------------------------------------------- JIRA create/delete
 
@@ -2610,6 +4331,13 @@ class MainWindow(QMainWindow):
                         if hasattr(self.left_panel.issue_tabs, "load_requirements"):
                             reqs = [r for r in rels if r.get("dst_issue_type") == "REQUIREMENT"]
                             self.left_panel.issue_tabs.load_requirements(reqs)
+                        if hasattr(self.left_panel.issue_tabs, "load_linked_testcases"):
+                            tcs = [
+                                r
+                                for r in rels
+                                if (r.get("dst_issue_type") or "").upper() == "TEST_CASE"
+                            ]
+                            self.left_panel.issue_tabs.load_linked_testcases(tcs)
             except Exception as e_rel:
                 print(f"[WARN] Failed to sync relations from JIRA: {e_rel}")
 

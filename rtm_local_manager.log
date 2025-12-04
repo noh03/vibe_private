@@ -1,0 +1,148 @@
+2025-12-04 22:58:51 [INFO] rtm.gui.main_window - MainWindow init: db_path=rtm_local.db, config_path=jira_config.json
+2025-12-04 22:58:55 [WARNING] rtm.gui.main_window - Jira config not loaded: [Errno 2] No such file or directory: 'jira_config.json'
+Traceback (most recent call last):
+  File "c:\Users\sonic\Documents\GitHub\vibe_private\rtm_local_manager\gui\main_window.py", line 1144, in __init__
+    self.jira_config = load_config_from_file(config_path)
+                       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "c:\Users\sonic\Documents\GitHub\vibe_private\rtm_local_manager\backend\jira_api.py", line 373, in load_config_from_file
+    with open(path, "r", encoding="utf-8") as f:
+         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+FileNotFoundError: [Errno 2] No such file or directory: 'jira_config.json'
+2025-12-04 22:58:55 [DEBUG] rtm.gui.main_window - Local tree_view selectionModel is None at _connect_signals; will be connected after model set.
+2025-12-04 23:18:05 [INFO] rtm.gui.main_window - MainWindow init: db_path=c:\Users\sonic\Documents\GitHub\vibe_private\rtm_local_manager\rtm_local.db, config_path=c:\Users\sonic\Documents\GitHub\vibe_private\rtm_local_manager\jira_config.json
+2025-12-04 23:18:06 [DEBUG] rtm.gui.main_window - Local tree_view selectionModel is None at _connect_signals; will be connected after model set.
+2025-12-04 23:18:23 [DEBUG] rtm.backend.jira_api - JIRA request GET https://your-jira-server.example.com/rest/rtm/1.0/api/tree/41500 kwargs={}
+2025-12-04 23:18:24 [DEBUG] rtm.backend.jira_api - JIRA request GET https://your-jira-server.example.com/rest/rtm/1.0/api/tree/41500 kwargs={}
+2025-12-04 23:18:25 [DEBUG] rtm.backend.jira_api - JIRA request GET https://your-jira-server.example.com/rest/rtm/1.0/api/tree/41500 kwargs={}
+2025-12-04 23:19:03 [DEBUG] rtm.backend.jira_api - JIRA request GET https://your-jira-server.example.com/rest/api/2/issueLinkType kwargs={}
+2025-12-04 23:19:37 [DEBUG] rtm.backend.jira_api - JIRA request GET https://your-jira-server.example.com/rest/rtm/1.0/api/tree/41500 kwargs={}
+2025-12-04 23:19:38 [DEBUG] rtm.backend.jira_api - JIRA request GET https://your-jira-server.example.com/rest/rtm/1.0/api/tree/41500 kwargs={}
+2025-12-04 23:19:39 [DEBUG] rtm.backend.jira_api - JIRA request GET https://your-jira-server.example.com/rest/rtm/1.0/api/tree/41500 kwargs={}
+2025-12-04 23:19:40 [DEBUG] rtm.backend.jira_api - JIRA request GET https://your-jira-server.example.com/rest/rtm/1.0/api/tree/41500 kwargs={}
+2025-12-04 23:19:41 [DEBUG] rtm.backend.jira_api - JIRA request GET https://your-jira-server.example.com/rest/rtm/1.0/api/tree/41500 kwargs={}
+2025-12-04 23:19:42 [DEBUG] rtm.backend.jira_api - JIRA request GET https://your-jira-server.example.com/rest/rtm/1.0/api/tree/41500 kwargs={}
+2025-12-04 23:19:50 [DEBUG] rtm.backend.jira_api - JIRA request GET https://your-jira-server.example.com/rest/rtm/1.0/api/tree/41500 kwargs={}
+2025-12-04 23:20:01 [DEBUG] rtm.backend.jira_api - JIRA request GET https://your-jira-server.example.com/rest/rtm/1.0/api/tree/41500 kwargs={}
+2025-12-04 23:20:14 [DEBUG] rtm.backend.jira_api - JIRA request GET https://your-jira-server.example.com/rest/rtm/1.0/api/tree/41500 kwargs={}
+2025-12-04 23:20:25 [DEBUG] rtm.backend.jira_api - JIRA request GET https://your-jira-server.example.com/rest/rtm/1.0/api/tree/41500 kwargs={}
+2025-12-04 23:22:31 [INFO] rtm.gui.main_window - MainWindow init: db_path=c:\Users\sonic\Documents\GitHub\vibe_private\rtm_local_manager\rtm_local.db, config_path=c:\Users\sonic\Documents\GitHub\vibe_private\rtm_local_manager\jira_config.json
+2025-12-04 23:22:31 [DEBUG] rtm.gui.main_window - Local tree_view selectionModel is None at _connect_signals; will be connected after model set.
+2025-12-04 23:22:41 [DEBUG] rtm.backend.jira_api - JIRA request GET https://your-jira-server.example.com/rest/rtm/1.0/api/tree/41500 kwargs={}
+2025-12-04 23:22:42 [DEBUG] rtm.backend.jira_api - JIRA request GET https://your-jira-server.example.com/rest/rtm/1.0/api/tree/41500 kwargs={}
+2025-12-04 23:22:42 [DEBUG] rtm.backend.jira_api - JIRA request GET https://your-jira-server.example.com/rest/rtm/1.0/api/tree/41500 kwargs={}
+2025-12-04 23:22:43 [DEBUG] rtm.backend.jira_api - JIRA request GET https://your-jira-server.example.com/rest/rtm/1.0/api/tree/41500 kwargs={}
+2025-12-04 23:22:45 [DEBUG] rtm.backend.jira_api - JIRA request GET https://your-jira-server.example.com/rest/rtm/1.0/api/tree/41500 kwargs={}
+2025-12-04 23:24:01 [DEBUG] rtm.backend.jira_api - JIRA request GET https://your-jira-server.example.com/rest/rtm/1.0/api/tree/41500 kwargs={}
+2025-12-04 23:24:02 [DEBUG] rtm.backend.jira_api - JIRA request GET https://your-jira-server.example.com/rest/rtm/1.0/api/tree/41500 kwargs={}
+2025-12-04 23:24:03 [DEBUG] rtm.backend.jira_api - JIRA request GET https://your-jira-server.example.com/rest/rtm/1.0/api/tree/41500 kwargs={}
+2025-12-04 23:24:06 [DEBUG] rtm.backend.jira_api - JIRA request GET https://your-jira-server.example.com/rest/rtm/1.0/api/tree/41500 kwargs={}
+2025-12-04 23:24:07 [DEBUG] rtm.backend.jira_api - JIRA request GET https://your-jira-server.example.com/rest/rtm/1.0/api/tree/41500 kwargs={}
+2025-12-04 23:24:07 [DEBUG] rtm.backend.jira_api - JIRA request GET https://your-jira-server.example.com/rest/rtm/1.0/api/tree/41500 kwargs={}
+2025-12-04 23:24:09 [DEBUG] rtm.backend.jira_api - JIRA request GET https://your-jira-server.example.com/rest/rtm/1.0/api/tree/41500 kwargs={}
+2025-12-04 23:24:43 [DEBUG] rtm.backend.jira_api - JIRA request GET https://your-jira-server.example.com/rest/rtm/1.0/api/tree/41500 kwargs={}
+2025-12-04 23:24:47 [DEBUG] rtm.backend.jira_api - JIRA request GET https://your-jira-server.example.com/rest/rtm/1.0/api/tree/41500 kwargs={}
+2025-12-04 23:24:51 [DEBUG] rtm.backend.jira_api - JIRA request GET https://your-jira-server.example.com/rest/rtm/1.0/api/tree/41500 kwargs={}
+2025-12-04 23:24:59 [DEBUG] rtm.backend.jira_api - JIRA request GET https://your-jira-server.example.com/rest/rtm/1.0/api/tree/41500 kwargs={}
+2025-12-04 23:25:12 [DEBUG] rtm.backend.jira_api - JIRA request GET https://your-jira-server.example.com/rest/rtm/1.0/api/tree/41500 kwargs={}
+2025-12-04 23:25:12 [DEBUG] rtm.backend.jira_api - JIRA request GET https://your-jira-server.example.com/rest/rtm/1.0/api/tree/41500 kwargs={}
+2025-12-04 23:25:13 [DEBUG] rtm.backend.jira_api - JIRA request GET https://your-jira-server.example.com/rest/rtm/1.0/api/tree/41500 kwargs={}
+2025-12-04 23:25:13 [DEBUG] rtm.backend.jira_api - JIRA request GET https://your-jira-server.example.com/rest/rtm/1.0/api/tree/41500 kwargs={}
+2025-12-04 23:25:14 [DEBUG] rtm.backend.jira_api - JIRA request GET https://your-jira-server.example.com/rest/rtm/1.0/api/tree/41500 kwargs={}
+2025-12-04 23:25:15 [DEBUG] rtm.backend.jira_api - JIRA request GET https://your-jira-server.example.com/rest/rtm/1.0/api/tree/41500 kwargs={}
+2025-12-04 23:25:15 [DEBUG] rtm.backend.jira_api - JIRA request GET https://your-jira-server.example.com/rest/rtm/1.0/api/tree/41500 kwargs={}
+2025-12-04 23:25:16 [DEBUG] rtm.backend.jira_api - JIRA request GET https://your-jira-server.example.com/rest/rtm/1.0/api/tree/41500 kwargs={}
+2025-12-04 23:25:16 [DEBUG] rtm.backend.jira_api - JIRA request GET https://your-jira-server.example.com/rest/rtm/1.0/api/tree/41500 kwargs={}
+2025-12-04 23:25:17 [DEBUG] rtm.backend.jira_api - JIRA request GET https://your-jira-server.example.com/rest/rtm/1.0/api/tree/41500 kwargs={}
+2025-12-04 23:32:41 [INFO] rtm.gui.main_window - MainWindow init: db_path=c:\Users\sonic\Documents\GitHub\vibe_private\rtm_local_manager\rtm_local.db, config_path=c:\Users\sonic\Documents\GitHub\vibe_private\rtm_local_manager\jira_config.json
+2025-12-04 23:32:41 [DEBUG] rtm.gui.main_window - Local tree_view selectionModel is None at _connect_signals; will be connected after model set.
+2025-12-04 23:32:44 [DEBUG] rtm.backend.jira_api - JIRA request GET https://your-jira-server.example.com/rest/rtm/1.0/api/tree/41500 kwargs={}
+2025-12-04 23:32:45 [DEBUG] rtm.backend.jira_api - JIRA request GET https://your-jira-server.example.com/rest/rtm/1.0/api/tree/41500 kwargs={}
+2025-12-04 23:32:45 [DEBUG] rtm.backend.jira_api - JIRA request GET https://your-jira-server.example.com/rest/rtm/1.0/api/tree/41500 kwargs={}
+2025-12-04 23:32:54 [DEBUG] rtm.backend.jira_api - JIRA request GET https://your-jira-server.example.com/rest/rtm/1.0/api/tree/41500 kwargs={}
+2025-12-04 23:32:55 [DEBUG] rtm.backend.jira_api - JIRA request GET https://your-jira-server.example.com/rest/rtm/1.0/api/tree/41500 kwargs={}
+2025-12-04 23:32:55 [DEBUG] rtm.backend.jira_api - JIRA request GET https://your-jira-server.example.com/rest/rtm/1.0/api/tree/41500 kwargs={}
+2025-12-04 23:32:56 [DEBUG] rtm.backend.jira_api - JIRA request GET https://your-jira-server.example.com/rest/rtm/1.0/api/tree/41500 kwargs={}
+2025-12-04 23:32:57 [DEBUG] rtm.backend.jira_api - JIRA request GET https://your-jira-server.example.com/rest/rtm/1.0/api/tree/41500 kwargs={}
+2025-12-04 23:32:59 [DEBUG] rtm.backend.jira_api - JIRA request GET https://your-jira-server.example.com/rest/rtm/1.0/api/tree/41500 kwargs={}
+2025-12-04 23:33:02 [INFO] rtm.gui.main_window - Created new local issue id=169, type=TEST_CASE, folder_id=None
+2025-12-04 23:49:42 [INFO] rtm.gui.main_window - MainWindow init: db_path=c:\Users\sonic\Documents\GitHub\vibe_private\rtm_local_manager\rtm_local.db, config_path=c:\Users\sonic\Documents\GitHub\vibe_private\rtm_local_manager\jira_config.json
+2025-12-04 23:49:42 [DEBUG] rtm.gui.main_window - Local tree_view selectionModel is None at _connect_signals; will be connected after model set.
+2025-12-04 23:49:47 [DEBUG] rtm.backend.jira_api - JIRA request GET https://your-jira-server.example.com/rest/rtm/1.0/api/tree/41500 kwargs={}
+2025-12-04 23:49:49 [DEBUG] rtm.backend.jira_api - JIRA request GET https://your-jira-server.example.com/rest/rtm/1.0/api/tree/41500 kwargs={}
+2025-12-04 23:49:49 [DEBUG] rtm.backend.jira_api - JIRA request GET https://your-jira-server.example.com/rest/rtm/1.0/api/tree/41500 kwargs={}
+2025-12-04 23:49:50 [DEBUG] rtm.backend.jira_api - JIRA request GET https://your-jira-server.example.com/rest/rtm/1.0/api/tree/41500 kwargs={}
+2025-12-04 23:49:51 [DEBUG] rtm.backend.jira_api - JIRA request GET https://your-jira-server.example.com/rest/rtm/1.0/api/tree/41500 kwargs={}
+2025-12-04 23:49:53 [DEBUG] rtm.backend.jira_api - JIRA request GET https://your-jira-server.example.com/rest/rtm/1.0/api/tree/41500 kwargs={}
+2025-12-04 23:49:56 [DEBUG] rtm.backend.jira_api - JIRA request GET https://your-jira-server.example.com/rest/rtm/1.0/api/tree/41500 kwargs={}
+2025-12-04 23:49:57 [DEBUG] rtm.backend.jira_api - JIRA request GET https://your-jira-server.example.com/rest/rtm/1.0/api/tree/41500 kwargs={}
+2025-12-04 23:49:58 [DEBUG] rtm.backend.jira_api - JIRA request GET https://your-jira-server.example.com/rest/rtm/1.0/api/tree/41500 kwargs={}
+2025-12-05 00:11:16 [INFO] rtm.gui.main_window - MainWindow init: db_path=c:\Users\sonic\Documents\GitHub\vibe_private\rtm_local_manager\rtm_local.db, config_path=c:\Users\sonic\Documents\GitHub\vibe_private\rtm_local_manager\jira_config.json
+2025-12-05 00:11:16 [DEBUG] rtm.gui.main_window - Local tree_view selectionModel is None at _connect_signals; will be connected after model set.
+2025-12-05 00:11:19 [DEBUG] rtm.backend.jira_api - JIRA request GET https://your-jira-server.example.com/rest/rtm/1.0/api/tree/41500 kwargs={}
+2025-12-05 00:11:20 [DEBUG] rtm.backend.jira_api - JIRA request GET https://your-jira-server.example.com/rest/rtm/1.0/api/tree/41500 kwargs={}
+2025-12-05 00:11:21 [DEBUG] rtm.backend.jira_api - JIRA request GET https://your-jira-server.example.com/rest/rtm/1.0/api/tree/41500 kwargs={}
+2025-12-05 00:11:21 [DEBUG] rtm.backend.jira_api - JIRA request GET https://your-jira-server.example.com/rest/rtm/1.0/api/tree/41500 kwargs={}
+2025-12-05 00:11:22 [DEBUG] rtm.backend.jira_api - JIRA request GET https://your-jira-server.example.com/rest/rtm/1.0/api/tree/41500 kwargs={}
+2025-12-05 00:11:31 [INFO] rtm.gui.main_window - Created new local issue id=170, type=TEST_CASE, folder_id=None
+2025-12-05 00:23:36 [INFO] rtm.gui.main_window - MainWindow init: db_path=c:\Users\sonic\Documents\GitHub\vibe_private\rtm_local_manager\rtm_local.db, config_path=c:\Users\sonic\Documents\GitHub\vibe_private\rtm_local_manager\jira_config.json
+2025-12-05 00:23:36 [DEBUG] rtm.gui.main_window - Local tree_view selectionModel is None at _connect_signals; will be connected after model set.
+2025-12-05 00:24:13 [DEBUG] rtm.backend.jira_api - JIRA request GET https://your-jira-server.example.com/rest/rtm/1.0/api/tree/41500 kwargs={}
+2025-12-05 00:24:22 [DEBUG] rtm.backend.jira_api - JIRA request GET https://your-jira-server.example.com/rest/rtm/1.0/api/tree/41500 kwargs={}
+2025-12-05 00:24:27 [INFO] rtm.gui.main_window - Created new local issue id=171, type=REQUIREMENT, folder_id=None
+2025-12-05 00:24:28 [INFO] rtm.gui.main_window - Created new local issue id=172, type=REQUIREMENT, folder_id=None
+2025-12-05 01:09:32 [INFO] rtm.gui.main_window - MainWindow init: db_path=c:\Users\sonic\Documents\GitHub\vibe_private\rtm_local_manager\rtm_local.db, config_path=c:\Users\sonic\Documents\GitHub\vibe_private\rtm_local_manager\jira_config.json
+2025-12-05 01:09:32 [DEBUG] rtm.gui.main_window - Local tree_view selectionModel is None at _connect_signals; will be connected after model set.
+2025-12-05 01:17:50 [INFO] rtm.gui.main_window - MainWindow init: db_path=c:\Users\sonic\Documents\GitHub\vibe_private\rtm_local_manager\rtm_local.db, config_path=c:\Users\sonic\Documents\GitHub\vibe_private\rtm_local_manager\jira_config.json
+2025-12-05 01:17:51 [DEBUG] rtm.gui.main_window - Local tree_view selectionModel is None at _connect_signals; will be connected after model set.
+2025-12-05 01:36:40 [INFO] rtm.gui.main_window - MainWindow init: db_path=c:\Users\sonic\Documents\GitHub\vibe_private\rtm_local_manager\rtm_local.db, config_path=c:\Users\sonic\Documents\GitHub\vibe_private\rtm_local_manager\jira_config.json
+2025-12-05 01:36:40 [DEBUG] rtm.gui.main_window - Local tree_view selectionModel is None at _connect_signals; will be connected after model set.
+2025-12-05 01:40:26 [INFO] rtm.gui.main_window - MainWindow init: db_path=c:\Users\sonic\Documents\GitHub\vibe_private\rtm_local_manager\rtm_local.db, config_path=c:\Users\sonic\Documents\GitHub\vibe_private\rtm_local_manager\jira_config.json
+2025-12-05 01:40:26 [DEBUG] rtm.gui.main_window - Local tree_view selectionModel is None at _connect_signals; will be connected after model set.
+2025-12-05 01:45:30 [INFO] rtm.gui.main_window - MainWindow init: db_path=c:\Users\sonic\Documents\GitHub\vibe_private\rtm_local_manager\rtm_local.db, config_path=c:\Users\sonic\Documents\GitHub\vibe_private\rtm_local_manager\jira_config.json
+2025-12-05 01:45:30 [DEBUG] rtm.gui.main_window - Local tree_view selectionModel is None at _connect_signals; will be connected after model set.
+2025-12-05 01:45:54 [INFO] rtm.gui.main_window - Created new local issue id=174, type=TEST_CASE, folder_id=None
+2025-12-05 01:45:55 [INFO] rtm.gui.main_window - Created new local issue id=175, type=TEST_CASE, folder_id=None
+2025-12-05 01:45:56 [INFO] rtm.gui.main_window - Created new local issue id=176, type=TEST_CASE, folder_id=None
+2025-12-05 01:45:56 [INFO] rtm.gui.main_window - Created new local issue id=177, type=TEST_CASE, folder_id=None
+2025-12-05 01:45:57 [INFO] rtm.gui.main_window - Created new local issue id=178, type=TEST_CASE, folder_id=None
+2025-12-05 01:45:57 [INFO] rtm.gui.main_window - Created new local issue id=179, type=TEST_CASE, folder_id=None
+2025-12-05 01:45:57 [INFO] rtm.gui.main_window - Created new local issue id=180, type=TEST_CASE, folder_id=None
+2025-12-05 01:45:57 [INFO] rtm.gui.main_window - Created new local issue id=181, type=TEST_CASE, folder_id=None
+2025-12-05 01:45:58 [INFO] rtm.gui.main_window - Created new local issue id=182, type=TEST_CASE, folder_id=None
+2025-12-05 01:45:59 [INFO] rtm.gui.main_window - Created new local issue id=183, type=TEST_CASE, folder_id=None
+2025-12-05 01:46:25 [INFO] rtm.gui.main_window - Created new local issue id=184, type=TEST_PLAN, folder_id=None
+2025-12-05 01:46:31 [INFO] rtm.gui.main_window - Created new local issue id=185, type=TEST_EXECUTION, folder_id=None
+2025-12-05 01:47:04 [INFO] rtm.gui.main_window - Created new local issue id=186, type=DEFECT, folder_id=LOCAL-TEST_EXECUTION-3e332e981669491f8cf9c37c233b89e7
+2025-12-05 01:47:05 [INFO] rtm.gui.main_window - Created new local issue id=187, type=DEFECT, folder_id=None
+2025-12-05 01:47:21 [INFO] rtm.gui.main_window - Created new local issue id=188, type=DEFECT, folder_id=None
+2025-12-05 01:47:25 [DEBUG] rtm.backend.jira_api - JIRA request GET https://your-jira-server.example.com/rest/api/2/issueLinkType kwargs={}
+2025-12-05 01:47:35 [INFO] rtm.gui.main_window - Created new local issue id=189, type=TEST_CASE, folder_id=None
+2025-12-05 01:47:58 [INFO] rtm.gui.main_window - Created new local issue id=190, type=TEST_PLAN, folder_id=None
+2025-12-05 01:47:59 [INFO] rtm.gui.main_window - Created new local issue id=191, type=TEST_PLAN, folder_id=None
+2025-12-05 01:48:55 [INFO] rtm.gui.main_window - MainWindow init: db_path=c:\Users\sonic\Documents\GitHub\vibe_private\rtm_local_manager\rtm_local.db, config_path=c:\Users\sonic\Documents\GitHub\vibe_private\rtm_local_manager\jira_config.json
+2025-12-05 01:48:55 [DEBUG] rtm.gui.main_window - Local tree_view selectionModel is None at _connect_signals; will be connected after model set.
+2025-12-05 01:50:17 [INFO] rtm.gui.main_window - Created new local issue id=196, type=TEST_CASE, folder_id=None
+2025-12-05 01:50:47 [INFO] rtm.gui.main_window - Created new folder id=LOCAL-TEST_EXECUTION-a8d94196763b485bb8012c96ce3ec243 under parent=None
+2025-12-05 01:51:30 [INFO] rtm.gui.main_window - Created new local issue id=197, type=TEST_EXECUTION, folder_id=None
+2025-12-05 01:51:36 [INFO] rtm.gui.main_window - Created new local issue id=198, type=REQUIREMENT, folder_id=None
+2025-12-05 01:51:50 [INFO] rtm.gui.main_window - Created new local issue id=199, type=DEFECT, folder_id=None
+2025-12-05 01:51:54 [DEBUG] rtm.backend.jira_api - JIRA request GET https://your-jira-server.example.com/rest/api/2/issueLinkType kwargs={}
+2025-12-05 01:52:27 [INFO] rtm.gui.main_window - Created new local issue id=200, type=TEST_EXECUTION, folder_id=None
+2025-12-05 01:53:51 [INFO] rtm.gui.main_window - MainWindow init: db_path=c:\Users\sonic\Documents\GitHub\vibe_private\rtm_local_manager\rtm_local.db, config_path=c:\Users\sonic\Documents\GitHub\vibe_private\rtm_local_manager\jira_config.json
+2025-12-05 01:53:51 [DEBUG] rtm.gui.main_window - Local tree_view selectionModel is None at _connect_signals; will be connected after model set.
+2025-12-05 01:54:00 [INFO] rtm.gui.main_window - Created new local issue id=201, type=TEST_CASE, folder_id=None
+2025-12-05 01:55:17 [INFO] rtm.gui.main_window - Created new local issue id=202, type=REQUIREMENT, folder_id=None
+2025-12-05 01:55:36 [DEBUG] rtm.backend.jira_api - JIRA request GET https://your-jira-server.example.com/rest/rtm/1.0/api/tree/41500 kwargs={}
+2025-12-05 01:55:39 [DEBUG] rtm.backend.jira_api - JIRA request GET https://your-jira-server.example.com/rest/rtm/1.0/api/tree/41500 kwargs={}
+2025-12-05 01:55:42 [DEBUG] rtm.backend.jira_api - JIRA request GET https://your-jira-server.example.com/rest/rtm/1.0/api/tree/41500 kwargs={}
+2025-12-05 01:58:06 [INFO] rtm.gui.main_window - MainWindow init: db_path=c:\Users\sonic\Documents\GitHub\vibe_private\rtm_local_manager\rtm_local.db, config_path=c:\Users\sonic\Documents\GitHub\vibe_private\rtm_local_manager\jira_config.json
+2025-12-05 01:58:06 [DEBUG] rtm.gui.main_window - Local tree_view selectionModel is None at _connect_signals; will be connected after model set.
+2025-12-05 01:58:08 [DEBUG] rtm.backend.jira_api - JIRA request GET https://your-jira-server.example.com/rest/rtm/1.0/api/tree/41500 kwargs={}
+2025-12-05 01:58:10 [DEBUG] rtm.backend.jira_api - JIRA request GET https://your-jira-server.example.com/rest/rtm/1.0/api/tree/41500 kwargs={}
+2025-12-05 01:58:11 [DEBUG] rtm.backend.jira_api - JIRA request GET https://your-jira-server.example.com/rest/rtm/1.0/api/tree/41500 kwargs={}
+2025-12-05 01:58:11 [DEBUG] rtm.backend.jira_api - JIRA request GET https://your-jira-server.example.com/rest/rtm/1.0/api/tree/41500 kwargs={}
+2025-12-05 01:58:16 [DEBUG] rtm.backend.jira_api - JIRA request GET https://your-jira-server.example.com/rest/rtm/1.0/api/tree/41500 kwargs={}
+2025-12-05 01:58:22 [DEBUG] rtm.backend.jira_api - JIRA request GET https://your-jira-server.example.com/rest/rtm/1.0/api/tree/41500 kwargs={}
+2025-12-05 01:58:23 [DEBUG] rtm.backend.jira_api - JIRA request GET https://your-jira-server.example.com/rest/rtm/1.0/api/tree/41500 kwargs={}
+2025-12-05 01:59:03 [DEBUG] rtm.backend.jira_api - JIRA request GET https://your-jira-server.example.com/rest/rtm/1.0/api/tree/41500 kwargs={}
+2025-12-05 02:01:20 [DEBUG] rtm.backend.jira_api - JIRA request GET https://your-jira-server.example.com/rest/rtm/1.0/api/tree/41500 kwargs={}

@@ -370,7 +370,7 @@ def import_project_from_excel(conn: sqlite3.Connection, project_id: int, file_pa
                                 status, priority, assignee, reporter, labels, components,
                                 security_level, fix_versions, affects_versions,
                                 rtm_environment, due_date, created, updated, is_deleted
-                            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'), datetime('now'), 0)
+                                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'), datetime('now'), 0)
                             """,
                             (
                                 project_id,
@@ -391,9 +391,9 @@ def import_project_from_excel(conn: sqlite3.Connection, project_id: int, file_pa
                                 fields.get("due_date") or "",
                             ),
                         )
-                        conn.commit()
+                    conn.commit()
                 else:
-                    # jira_key 가 비어 있는 경우:
+                    # jira_key が 비어 있는 경우:
                     #   - 엑셀에 local ID 가 없어도, issue_type / summary 정보만 있으면
                     #     로컬 전용 이슈를 자동으로 생성한다.
                     issue_type = fields.get("issue_type")

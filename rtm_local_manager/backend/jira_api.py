@@ -83,15 +83,22 @@ class JiraRTMClient:
 
     # ------------------------------------------------------------------ core Jira issue (standard REST)
 
-    def get_jira_issue(self, jira_key: str) -> Any:
+    def get_jira_issue(self, jira_key: str, expand: str | None = None) -> Any:
         """
         표준 Jira Issue REST API 를 사용하여 개별 이슈를 조회한다.
 
         - 경로: GET /rest/api/2/issue/{key}
         - 응답 JSON 은 jira_mapping.map_jira_to_local() 과
           extract_relations_from_jira() 의 입력으로 사용된다.
+
+        :param jira_key: 이슈 키 (예: "PROJ-1")
+        :param expand: comments, changelog 등 확장 필드가 필요할 때
+                       "comments,changelog" 형태로 지정 (선택 사항)
         """
-        return self._request("GET", f"/rest/api/2/issue/{jira_key}")
+        params: Dict[str, Any] | None = None
+        if expand:
+            params = {"expand": expand}
+        return self._request("GET", f"/rest/api/2/issue/{jira_key}", params=params)
 
     # ------------------------------------------------------------------ Jira issue search (JQL)
 
