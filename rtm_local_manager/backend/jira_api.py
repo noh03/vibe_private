@@ -150,13 +150,16 @@ class JiraRTMClient:
 
     # ------------------------------------------------------------------ helpers (generic issue-level mapping)
 
-    # 아래 메서드들은 RTM REST API v1 문서를 참고해 endpoint path를 맞추어야 한다.
-    # 여기서는 다음과 같은 패턴을 기본값으로 둔다.
-    # - Requirement:      /rest/rtm/1.0/api/requirement/{key}
-    # - Test Case:        /rest/rtm/1.0/api/testcase/{key}
-    # - Test Plan:        /rest/rtm/1.0/api/testplan/{key}
-    # - Test Execution:   /rest/rtm/1.0/api/testexecution/{key}
-    # - Defect:           /rest/rtm/1.0/api/defect/{key}
+    # 아래 메서드들은 Deviniti RTM REST API 문서(RTM REST API.md)를 기준으로 한다.
+    # base URL:
+    #   http(s)://SERVER[:PORT]/[CONTEXT]/rest/rtm/1.0/api
+    #
+    # 엔드포인트 패턴:
+    # - Requirement:      /rest/rtm/1.0/api/requirement/{testKey}
+    # - Test Case:        /rest/rtm/1.0/api/test-case/{testKey}
+    # - Test Plan:        /rest/rtm/1.0/api/test-plan/{testKey}
+    # - Test Execution:   /rest/rtm/1.0/api/test-execution/{testKey}
+    # - Defect:           /rest/rtm/1.0/api/defect/{testKey}
     #
     # 실제 path가 다르다면 여기에서 수정하면 된다.
 
@@ -165,11 +168,11 @@ class JiraRTMClient:
         if t == "REQUIREMENT":
             return f"/rest/rtm/1.0/api/requirement/{key}"
         if t == "TEST_CASE":
-            return f"/rest/rtm/1.0/api/testcase/{key}"
+            return f"/rest/rtm/1.0/api/test-case/{key}"
         if t == "TEST_PLAN":
-            return f"/rest/rtm/1.0/api/testplan/{key}"
+            return f"/rest/rtm/1.0/api/test-plan/{key}"
         if t == "TEST_EXECUTION":
-            return f"/rest/rtm/1.0/api/testexecution/{key}"
+            return f"/rest/rtm/1.0/api/test-execution/{key}"
         if t == "DEFECT":
             return f"/rest/rtm/1.0/api/defect/{key}"
         # fallback: 일반 Jira Issue REST 사용 (예: /rest/api/2/issue/{key})
@@ -222,11 +225,11 @@ class JiraRTMClient:
         if t == "REQUIREMENT":
             path = "/rest/rtm/1.0/api/requirement"
         elif t == "TEST_CASE":
-            path = "/rest/rtm/1.0/api/testcase"
+            path = "/rest/rtm/1.0/api/test-case"
         elif t == "TEST_PLAN":
-            path = "/rest/rtm/1.0/api/testplan"
+            path = "/rest/rtm/1.0/api/test-plan"
         elif t == "TEST_EXECUTION":
-            path = "/rest/rtm/1.0/api/testexecution"
+            path = "/rest/rtm/1.0/api/test-execution"
         elif t == "DEFECT":
             path = "/rest/rtm/1.0/api/defect"
         else:
@@ -244,11 +247,14 @@ class JiraRTMClient:
         RTM Test Case의 Steps 정보를 조회한다.
 
         실제 Deviniti RTM REST 문서를 참고하여 endpoint path를 조정해야 한다.
-        여기서는 예시로:
-            GET /rest/rtm/1.0/api/testcase/{key}/steps
-        형태를 가정한다.
+        공식 문서에는 별도 steps 엔드포인트가 명시되어 있지 않으므로,
+        여기서는 예시로 다음과 같은 패턴을 사용한다:
+
+            GET /rest/rtm/1.0/api/test-case/{testKey}/steps
+
+        실제 환경에 맞게 수정 가능하다.
         """
-        path = f"/rest/rtm/1.0/api/testcase/{jira_key}/steps"
+        path = f"/rest/rtm/1.0/api/test-case/{jira_key}/steps"
         return self._request("GET", path)
 
     def update_testcase_steps(self, jira_key: str, payload: Dict[str, Any]) -> Any:
@@ -257,10 +263,12 @@ class JiraRTMClient:
 
         실제 RTM 환경에 맞춰 payload 구조 및 endpoint path를 수정해야 한다.
         기본적인 아이디어는:
-            PUT /rest/rtm/1.0/api/testcase/{key}/steps
+
+            PUT /rest/rtm/1.0/api/test-case/{testKey}/steps
+
         와 같은 엔드포인트에 steps 리스트를 전송하는 것이다.
         """
-        path = f"/rest/rtm/1.0/api/testcase/{jira_key}/steps"
+        path = f"/rest/rtm/1.0/api/test-case/{jira_key}/steps"
         return self._request("PUT", path, json=payload)
 
 
@@ -298,12 +306,13 @@ class JiraRTMClient:
         """
         RTM Test Plan에 포함된 Test Case 목록을 조회한다.
 
-        실제 Deviniti RTM REST 문서를 참고하여 endpoint path를 조정해야 한다.
-        여기서는 예시로:
-            GET /rest/rtm/1.0/api/testplan/{key}/testcases
-        형태를 가정한다.
+        RTM REST 문서에서는 Test Plan 객체의 includedTestCases 필드를 통해
+        포함된 Test Case 를 노출한다. 여기서는 편의상 별도 헬퍼 endpoint 를
+        가정하며, 실제 환경에 맞게 수정 가능하다:
+
+            GET /rest/rtm/1.0/api/test-plan/{testKey}/testcases
         """
-        path = f"/rest/rtm/1.0/api/testplan/{jira_key}/testcases"
+        path = f"/rest/rtm/1.0/api/test-plan/{jira_key}/testcases"
         return self._request("GET", path)
 
     def update_testplan_testcases(self, jira_key: str, payload: Dict[str, Any]) -> Any:
@@ -311,41 +320,46 @@ class JiraRTMClient:
         RTM Test Plan의 Test Case 구성을 업데이트한다.
 
         예시:
-            PUT /rest/rtm/1.0/api/testplan/{key}/testcases
+
+            PUT /rest/rtm/1.0/api/test-plan/{testKey}/testcases
             { "testCases": [ {"key": "PROJ-1", "order": 1}, ... ] }
         """
-        path = f"/rest/rtm/1.0/api/testplan/{jira_key}/testcases"
+        path = f"/rest/rtm/1.0/api/test-plan/{jira_key}/testcases"
         return self._request("PUT", path, json=payload)
 
     def get_testexecution_details(self, jira_key: str) -> Any:
         """
         RTM Test Execution의 메타 정보를 조회한다.
 
-        예시 endpoint (환경에 맞게 조정 필요):
-            GET /rest/rtm/1.0/api/testexecution/{key}
+        RTM REST 문서의 Test Execution 섹션과 매핑:
+
+            GET /rest/rtm/1.0/api/test-execution/{testKey}
         """
-        path = f"/rest/rtm/1.0/api/testexecution/{jira_key}"
+        path = f"/rest/rtm/1.0/api/test-execution/{jira_key}"
         return self._request("GET", path)
 
     def get_testexecution_testcases(self, jira_key: str) -> Any:
         """
         RTM Test Execution에 포함된 Test Case Execution 목록을 조회한다.
 
-        예시 endpoint:
-            GET /rest/rtm/1.0/api/testexecution/{key}/testcases
-        또는 별도의 test-case-execution API를 사용할 수도 있다.
+        실제 RTM에서는 Test Case Execution API(`/api/test-case-execution/...`)
+        를 사용하는 것이 더 정확하다. 여기서는 간단한 헬퍼 endpoint 를
+        가정하며, 필요 시 교체한다:
+
+            GET /rest/rtm/1.0/api/test-execution/{testKey}/testcases
         """
-        path = f"/rest/rtm/1.0/api/testexecution/{jira_key}/testcases"
+        path = f"/rest/rtm/1.0/api/test-execution/{jira_key}/testcases"
         return self._request("GET", path)
 
     def update_testexecution(self, jira_key: str, payload: Dict[str, Any]) -> Any:
         """
         RTM Test Execution 메타 정보 업데이트용 skeleton.
 
-        예시 endpoint:
-            PUT /rest/rtm/1.0/api/testexecution/{key}
+        RTM REST 문서의 Test Execution 업데이트와 매핑:
+
+            PUT /rest/rtm/1.0/api/test-execution/{testKey}
         """
-        path = f"/rest/rtm/1.0/api/testexecution/{jira_key}"
+        path = f"/rest/rtm/1.0/api/test-execution/{jira_key}"
         return self._request("PUT", path, json=payload)
 
     def update_testexecution_testcases(self, jira_key: str, payload: Dict[str, Any]) -> Any:
@@ -353,7 +367,8 @@ class JiraRTMClient:
         RTM Test Execution의 Test Case Execution 목록을 업데이트한다.
 
         예시 endpoint:
-            PUT /rest/rtm/1.0/api/testexecution/{key}/testcases
+
+            PUT /rest/rtm/1.0/api/test-execution/{testKey}/testcases
             {
               "testCases": [
                 {"key": "PROJ-1", "result": "PASS", "environment": "...", ...},
@@ -361,7 +376,7 @@ class JiraRTMClient:
               ]
             }
         """
-        path = f"/rest/rtm/1.0/api/testexecution/{jira_key}/testcases"
+        path = f"/rest/rtm/1.0/api/test-execution/{jira_key}/testcases"
         return self._request("PUT", path, json=payload)
 
 def load_config_from_file(path: str) -> JiraConfig:

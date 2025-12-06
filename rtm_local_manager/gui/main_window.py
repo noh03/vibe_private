@@ -98,6 +98,8 @@ class IssueTabWidget(QTabWidget):
         super().__init__(parent)
 
         self._current_issue: Dict[str, Any] | None = None
+        self._current_details_columns: int = 2
+        self._detail_label_widgets: list[QLabel] = []
 
         self.details_tab = QWidget()
         self._init_details_tab()
@@ -132,16 +134,17 @@ class IssueTabWidget(QTabWidget):
 
     def _init_details_tab(self):
         from PySide6.QtWidgets import (
-            QFormLayout,
+            QGridLayout,
             QLineEdit,
             QTextEdit,
             QVBoxLayout,
             QGroupBox,
             QPushButton,
+            QLabel,
         )
 
         main_layout = QVBoxLayout()
-        form_layout = QFormLayout()
+        self._details_grid = QGridLayout()
 
         # issues 테이블 스키마 기반 필드들
         self.ed_local_id = QLineEdit()
@@ -157,6 +160,8 @@ class IssueTabWidget(QTabWidget):
         self.ed_security_level = QLineEdit()
         self.ed_fix_versions = QLineEdit()
         self.ed_affects_versions = QLineEdit()
+        self.ed_epic_link = QLineEdit()
+        self.ed_sprint = QLineEdit()
         self.ed_rtm_env = QLineEdit()
         self.ed_due_date = QLineEdit()
         self.ed_created = QLineEdit()
@@ -171,27 +176,37 @@ class IssueTabWidget(QTabWidget):
         self.ed_created.setReadOnly(True)
         self.ed_updated.setReadOnly(True)
 
-        form_layout.addRow("Local ID", self.ed_local_id)
-        form_layout.addRow("JIRA Key", self.ed_jira_key)
-        form_layout.addRow("Issue Type", self.ed_issue_type)
-        form_layout.addRow("Summary", self.ed_summary)
-        form_layout.addRow("Status", self.ed_status)
-        form_layout.addRow("Priority", self.ed_priority)
-        form_layout.addRow("Assignee", self.ed_assignee)
-        form_layout.addRow("Reporter", self.ed_reporter)
-        form_layout.addRow("Labels", self.ed_labels)
-        form_layout.addRow("Components", self.ed_components)
-        form_layout.addRow("Security Level", self.ed_security_level)
-        form_layout.addRow("Fix Versions", self.ed_fix_versions)
-        form_layout.addRow("Affects Versions", self.ed_affects_versions)
-        form_layout.addRow("RTM Environment", self.ed_rtm_env)
-        form_layout.addRow("Due Date", self.ed_due_date)
-        form_layout.addRow("Created", self.ed_created)
-        form_layout.addRow("Updated", self.ed_updated)
-        form_layout.addRow("Attachments", self.ed_attachments)
-        form_layout.addRow("Description", self.txt_description)
+        # 동적 다단 레이아웃을 위한 필드 정의 (Description 제외)
+        self._details_fields: list[tuple[str, QLineEdit]] = [
+            ("Local ID", self.ed_local_id),
+            ("JIRA Key", self.ed_jira_key),
+            ("Issue Type", self.ed_issue_type),
+            ("Status", self.ed_status),
+            ("Priority", self.ed_priority),
+            ("Assignee", self.ed_assignee),
+            ("Reporter", self.ed_reporter),
+            ("RTM Environment", self.ed_rtm_env),
+            ("Components", self.ed_components),
+            ("Labels", self.ed_labels),
+            ("Fix Versions", self.ed_fix_versions),
+            ("Affects Versions", self.ed_affects_versions),
+            ("Epic Link", self.ed_epic_link),
+            ("Sprint", self.ed_sprint),
+            ("Security Level", self.ed_security_level),
+            ("Due Date", self.ed_due_date),
+            ("Created", self.ed_created),
+            ("Updated", self.ed_updated),
+            ("Attachments", self.ed_attachments),
+        ]
 
-        main_layout.addLayout(form_layout)
+        # 초기에는 2단 레이아웃으로 구성
+        self._current_details_columns = 2
+        self._rebuild_details_grid(self._current_details_columns)
+        main_layout.addLayout(self._details_grid)
+
+        # Description 은 하단에 단일 열로 크게 배치
+        main_layout.addWidget(QLabel("Description"))
+        main_layout.addWidget(self.txt_description)
 
         # Activity (Comments / History from JIRA)
         activity_group = QGroupBox("Activity (Comments / History)")
@@ -206,6 +221,80 @@ class IssueTabWidget(QTabWidget):
         main_layout.addWidget(activity_group)
 
         self.details_tab.setLayout(main_layout)
+
+    # ------------------------------------------------------------------ Details layout helpers (responsive columns)
+
+    def _rebuild_details_grid(self, columns: int) -> None:
+        """
+        Details 상단 메타 필드를 주어진 columns 수(1~4)로 재배치한다.
+        - 각 필드는 (Label, Editor) 쌍으로, 한 column 당 Label+Editor 를 차지한다.
+        """
+        if columns < 1:
+            columns = 1
+        if columns > 4:
+            columns = 4
+
+        grid = self._details_grid
+
+        # 이전에 생성된 레이블 위젯은 완전히 제거 (레이아웃에서도, 부모 관계에서도)
+        for lbl in getattr(self, "_detail_label_widgets", []):
+            try:
+                lbl.setParent(None)
+                lbl.deleteLater()
+            except Exception:
+                pass
+        self._detail_label_widgets = []
+
+        # 기존 레이아웃 아이템 제거 (에디터는 나중에 다시 addWidget 으로 배치)
+        while grid.count():
+            grid.takeAt(0)
+
+        # 필드 재배치
+        row = 0
+        col_count = columns * 2  # Label / Editor 쌍
+
+        for idx, (label_text, editor) in enumerate(self._details_fields):
+            col_group = idx % columns
+            row = idx // columns
+            label_col = col_group * 2
+            editor_col = label_col + 1
+
+            lbl = QLabel(label_text)
+            lbl.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
+            grid.addWidget(lbl, row, label_col)
+            grid.addWidget(editor, row, editor_col)
+            self._detail_label_widgets.append(lbl)
+
+        # 컬럼 폭 비율: label 는 좁게, field 는 넓게
+        for c in range(col_count):
+            if c % 2 == 0:  # label
+                grid.setColumnStretch(c, 0)
+            else:           # editor
+                grid.setColumnStretch(c, 1)
+
+        self._current_details_columns = columns
+
+    def resizeEvent(self, event) -> None:
+        """
+        탭 위젯(각 내부 창)의 실제 폭에 따라 Details 상단 필드의 단 수(1~4단)를 동적으로 조정한다.
+        """
+        super().resizeEvent(event)
+
+        # 이 IssueTabWidget 이 속한 내부 창(좌/우 패널)의 실제 폭을 기준으로 columns 결정
+        details_width = self.width()
+
+        # 폭 기준 임계값 (pixel)
+        if details_width < 550:
+            cols = 1
+        elif details_width < 900:
+            cols = 2
+        elif details_width < 1300:
+            cols = 3
+        else:
+            cols = 4
+
+        if cols != getattr(self, "_current_details_columns", 2):
+            self._rebuild_details_grid(cols)
 
     # ------------------------------------------------------------------ Other tabs (wireframe for now)
 
@@ -2334,6 +2423,8 @@ class IssueTabWidget(QTabWidget):
             self.ed_security_level.setText("")
             self.ed_fix_versions.setText("")
             self.ed_affects_versions.setText("")
+            self.ed_epic_link.setText("")
+            self.ed_sprint.setText("")
             self.ed_rtm_env.setText("")
             self.ed_due_date.setText("")
             self.ed_created.setText("")
@@ -2359,6 +2450,8 @@ class IssueTabWidget(QTabWidget):
         self.ed_security_level.setText(issue.get("security_level") or "")
         self.ed_fix_versions.setText(issue.get("fix_versions") or "")
         self.ed_affects_versions.setText(issue.get("affects_versions") or "")
+        self.ed_epic_link.setText(issue.get("epic_link") or "")
+        self.ed_sprint.setText(issue.get("sprint") or "")
         self.ed_rtm_env.setText(issue.get("rtm_environment") or "")
         self.ed_due_date.setText(issue.get("due_date") or "")
         self.ed_created.setText(issue.get("created") or "")
@@ -2464,6 +2557,19 @@ class PanelWidget(QWidget):
 
         main_layout.addLayout(header_layout)
 
+        # 모듈(최상위) 탭바: Dashboard / Requirements / Test Cases / Test Plans / Test Executions / Defects
+        from PySide6.QtWidgets import QTabBar
+
+        self.module_tab_bar = QTabBar()
+        self.module_tab_bar.addTab("Dashboard")
+        self.module_tab_bar.addTab("Requirements")
+        self.module_tab_bar.addTab("Test Cases")
+        self.module_tab_bar.addTab("Test Plans")
+        self.module_tab_bar.addTab("Test Executions")
+        self.module_tab_bar.addTab("Defects")
+        self.module_tab_bar.setExpanding(False)
+        main_layout.addWidget(self.module_tab_bar)
+
         # 트리 + 탭을 좌/우로 배치
         tree_and_tabs = QSplitter(Qt.Horizontal)
         tree_and_tabs.setChildrenCollapsible(False)
@@ -2485,11 +2591,28 @@ class PanelWidget(QWidget):
 
 
 class MainWindow(QMainWindow):
-    def __init__(self, db_path=None, config_path: str = "jira_config.json"):
+    def __init__(self, db_path=None, config_path: str = "jira_config.json", mode: str = "both"):
+        """
+        mode:
+          - "local"  : 로컬 관리 전용 윈도우 (온라인 패널/툴바 요소 숨김)
+          - "online" : 온라인(JIRA RTM) 전용 윈도우 (로컬 패널/툴바 요소 숨김)
+          - "both"   : 기존처럼 좌/우 패널을 한 창에 모두 배치
+        """
         super().__init__()
         self.logger = get_logger(__name__)
-        self.logger.info("MainWindow init: db_path=%s, config_path=%s", db_path, config_path)
-        self.setWindowTitle("RTM Local Manager (JIRA RTM Sync Tool)")
+        self.mode = mode.lower()
+        self.logger.info(
+            "MainWindow init: db_path=%s, config_path=%s, mode=%s",
+            db_path,
+            config_path,
+            self.mode,
+        )
+        title_suffix = {
+            "local": " - Local",
+            "online": " - Online",
+            "both": "",
+        }.get(self.mode, "")
+        self.setWindowTitle(f"RTM Local Manager (JIRA RTM Sync Tool){title_suffix}")
         self.resize(1600, 900)
 
         # DB, Jira client 초기화
@@ -2526,9 +2649,11 @@ class MainWindow(QMainWindow):
         self.current_issue_type: str | None = None
         self.current_testexecution_id: int | None = None
 
-        # 상단 이슈 타입 탭에 따른 트리 필터 (REQUIREMENT / TEST_CASE / TEST_PLAN / TEST_EXECUTION / DEFECT)
-        # 기본값은 Requirements 탭
-        self.tree_issue_type_filter: str | None = "REQUIREMENT"
+        # 로컬 / 온라인 트리의 이슈 타입 필터
+        # - Dashboard 탭: None (필터 없음, 모든 이슈 타입 표시)
+        # - 나머지 탭: REQUIREMENT / TEST_CASE / TEST_PLAN / TEST_EXECUTION / DEFECT
+        self.local_issue_type_filter: str | None = None
+        self.online_issue_type_filter: str | None = None
 
         # 메뉴바 생성 (File / Local / JIRA / Help)
         self._create_menu_bar()
@@ -2570,7 +2695,7 @@ class MainWindow(QMainWindow):
         self.jira_filter_edit.returnPressed.connect(self.on_jira_filter_search)
         toolbar.addWidget(self.jira_filter_edit)
 
-        # 중앙 위젯: 상단 이슈 타입 탭바 + 하단 좌/우 스플리터
+        # 중앙 위젯: 좌/우(기본) 또는 상/하(옵션) 배치를 위한 스플리터
         splitter = QSplitter(Qt.Horizontal)
         splitter.setChildrenCollapsible(False)
 
@@ -2587,6 +2712,13 @@ class MainWindow(QMainWindow):
         mid_layout.addWidget(self.btn_push_jira)
         mid_layout.addStretch()
 
+        # 스플리터와 중앙 패널들을 속성으로 보관 (레이아웃 전환 시 재사용)
+        self.main_splitter = splitter
+        self.mid_panel = mid_panel
+
+        # 기본 레이아웃 모드: 좌(로컬) / 우(온라인)
+        self.layout_mode: str = "horizontal"  # "horizontal" or "vertical"
+
         splitter.addWidget(self.left_panel)
         splitter.addWidget(mid_panel)
         splitter.addWidget(self.right_panel)
@@ -2597,19 +2729,6 @@ class MainWindow(QMainWindow):
 
         container = QWidget()
         container_layout = QVBoxLayout(container)
-
-        # 상단 이슈 타입 탭바: Requirements / Test Cases / Test Plans / Test Executions / Defects
-        self.issue_type_bar = QTabBar()
-        self.issue_type_bar.addTab("Requirements")
-        self.issue_type_bar.addTab("Test Cases")
-        self.issue_type_bar.addTab("Test Plans")
-        self.issue_type_bar.addTab("Test Executions")
-        self.issue_type_bar.addTab("Defects")
-        # 탭 폭을 창 전체에 강제로 맞추지 않고, 텍스트 길이에 맞게 표시
-        self.issue_type_bar.setExpanding(False)
-        self.issue_type_bar.currentChanged.connect(self._on_issue_type_tab_changed)
-
-        container_layout.addWidget(self.issue_type_bar)
         container_layout.addWidget(splitter)
 
         self.setCentralWidget(container)
@@ -2625,11 +2744,16 @@ class MainWindow(QMainWindow):
         self.status_bar.addPermanentWidget(self.jira_status_label)
         self._update_jira_status_label()
 
+        # 좌/우 패널의 모듈 탭바를 MainWindow 핸들러에 연결
+        self.left_panel.module_tab_bar.currentChanged.connect(self._on_local_issue_type_tab_changed)
+        self.right_panel.module_tab_bar.currentChanged.connect(self._on_online_issue_type_tab_changed)
+
         # 시그널 연결
         self._connect_signals()
 
-        # 최초 로드: 로컬 트리
-        self.reload_local_tree()
+        # 최초 로드: 초기 필터는 Dashboard(None)로 두고 양쪽 트리 모두 로드
+        self._on_local_issue_type_tab_changed(self.left_panel.module_tab_bar.currentIndex())
+        self._on_online_issue_type_tab_changed(self.right_panel.module_tab_bar.currentIndex())
 
         # JIRA가 사용 가능한 경우에만 오른쪽 패널 활성화
         if not self.jira_available:
@@ -2651,27 +2775,37 @@ class MainWindow(QMainWindow):
         self.jira_status_label.setText(text)
         self.jira_status_label.setStyleSheet(f"color: {color}; font-weight: bold;")
 
-    def _on_issue_type_tab_changed(self, index: int) -> None:
+    # ------------------------------------------------------------------ Top-level module tabs (Local / Online)
+
+    def _issue_type_from_index(self, index: int) -> str | None:
         """
-        상단 이슈 타입 탭 변경 시, 트리에 표시할 이슈 타입 필터를 변경한다.
-        - 0: REQUIREMENT
-        - 1: TEST_CASE
-        - 2: TEST_PLAN
-        - 3: TEST_EXECUTION
-        - 4: DEFECT
+        모듈 탭 인덱스를 이슈 타입 문자열로 변환한다.
+        - 0: Dashboard (None 반환, 필터 없음)
+        - 1: REQUIREMENT
+        - 2: TEST_CASE
+        - 3: TEST_PLAN
+        - 4: TEST_EXECUTION
+        - 5: DEFECT
         """
         mapping = {
-            0: "REQUIREMENT",
-            1: "TEST_CASE",
-            2: "TEST_PLAN",
-            3: "TEST_EXECUTION",
-            4: "DEFECT",
+            1: "REQUIREMENT",
+            2: "TEST_CASE",
+            3: "TEST_PLAN",
+            4: "TEST_EXECUTION",
+            5: "DEFECT",
         }
-        self.tree_issue_type_filter = mapping.get(index)
+        return mapping.get(index)
+
+    def _on_local_issue_type_tab_changed(self, index: int) -> None:
+        """
+        좌측(로컬) 패널의 모듈 탭 변경 시 호출.
+        로컬 트리 필터와 상단 로컬 전용 버튼 상태를 업데이트한다.
+        """
+        self.local_issue_type_filter = self._issue_type_from_index(index)
 
         # 로컬 패널 헤더의 버튼 텍스트/표시를 이슈 타입에 맞게 조정
         if self.left_panel and hasattr(self.left_panel, "btn_new_issue"):
-            it = self.tree_issue_type_filter or ""
+            it = self.local_issue_type_filter or ""
             text_map = {
                 "REQUIREMENT": "Create Requirement",
                 "TEST_CASE": "Create Test Case",
@@ -2688,8 +2822,16 @@ class MainWindow(QMainWindow):
             self.left_panel.btn_add_to_testplan.setVisible(is_tc)
             self.left_panel.btn_link_requirement.setVisible(is_tc)
 
-        # 이슈 타입 탭 변경 시, 좌/우 트리를 새 필터에 맞게 다시 로드
+        # 로컬 트리 재로드
         self.reload_local_tree()
+
+    def _on_online_issue_type_tab_changed(self, index: int) -> None:
+        """
+        우측(온라인) 패널의 모듈 탭 변경 시 호출.
+        온라인 RTM 트리 필터를 업데이트한다.
+        """
+        self.online_issue_type_filter = self._issue_type_from_index(index)
+
         if self.jira_available:
             try:
                 self.on_refresh_online_tree()
@@ -3013,7 +3155,7 @@ class MainWindow(QMainWindow):
 
         tree_data = fetch_folder_tree(self.conn, self.project.id)
 
-        type_filter = getattr(self, "tree_issue_type_filter", None)
+        type_filter = self.local_issue_type_filter
 
         model = QStandardItemModel()
         model.setHorizontalHeaderLabels(["Name"])
@@ -3109,7 +3251,7 @@ class MainWindow(QMainWindow):
     def on_new_local_issue_clicked(self):
         """
         현재 선택된 폴더/이슈를 기준으로 새 로컬 이슈를 생성한다.
-        - 상단 이슈 타입 탭(tree_issue_type_filter)에 따라 issue_type 결정.
+        - 좌측 모듈 탭(local_issue_type_filter)에 따라 issue_type 결정.
         - 선택이 폴더면 해당 folder_id 하위에 생성.
         - 선택이 이슈면 그 이슈의 folder_id 하위에 생성.
         - 선택이 없으면 folder_id 없이 프로젝트 루트에 생성.
@@ -3118,7 +3260,7 @@ class MainWindow(QMainWindow):
             self.status_bar.showMessage("No project loaded; cannot create issue.")
             return
 
-        issue_type = (self.tree_issue_type_filter or "REQUIREMENT").upper()
+        issue_type = (self.local_issue_type_filter or "REQUIREMENT").upper()
 
         folder_id: str | None = None
         model = self.left_panel.tree_view.model()
@@ -3224,7 +3366,7 @@ class MainWindow(QMainWindow):
                             if issue:
                                 folder_parent_id = issue.get("folder_id")
 
-        issue_type = (self.tree_issue_type_filter or "REQUIREMENT").upper()
+        issue_type = (self.local_issue_type_filter or "REQUIREMENT").upper()
         new_folder_id = create_folder_node(
             self.conn,
             project_id=self.project.id,
@@ -3515,7 +3657,7 @@ class MainWindow(QMainWindow):
                 key = node.get("jiraKey") or node.get("key") or ""
                 name = node.get("name") or node.get("summary") or key or ""
 
-                type_filter = getattr(self, "tree_issue_type_filter", None)
+                type_filter = self.online_issue_type_filter
 
                 # 이슈 노드
                 if node_type != "FOLDER":
@@ -3632,6 +3774,31 @@ class MainWindow(QMainWindow):
         act_delete.triggered.connect(self.on_delete_in_jira_clicked)
         jira_menu.addAction(act_delete)
 
+        # View 메뉴: 좌/우(로컬/온라인) 윈도우 표시 및 레이아웃 제어
+        view_menu = menubar.addMenu("View")
+        self.act_view_local = QAction("Show Local Window", self, checkable=True)
+        self.act_view_local.setChecked(True)
+        self.act_view_online = QAction("Show Online Window", self, checkable=True)
+        self.act_view_online.setChecked(True)
+
+        self.act_view_local.triggered.connect(self._on_toggle_local_window)
+        self.act_view_online.triggered.connect(self._on_toggle_online_window)
+
+        view_menu.addAction(self.act_view_local)
+        view_menu.addAction(self.act_view_online)
+
+        # 레이아웃(좌/우 vs 상/하) 전환
+        layout_menu = view_menu.addMenu("Layout")
+        self.act_layout_horizontal = QAction("Left / Right (Local | Online)", self, checkable=True)
+        self.act_layout_vertical = QAction("Top / Bottom (Online / Local)", self, checkable=True)
+        self.act_layout_horizontal.setChecked(True)
+
+        self.act_layout_horizontal.triggered.connect(self._on_set_layout_horizontal)
+        self.act_layout_vertical.triggered.connect(self._on_set_layout_vertical)
+
+        layout_menu.addAction(self.act_layout_horizontal)
+        layout_menu.addAction(self.act_layout_vertical)
+
         # Help 메뉴
         help_menu = menubar.addMenu("Help")
         act_about = QAction("About RTM Local Manager", self)
@@ -3646,6 +3813,82 @@ class MainWindow(QMainWindow):
             "JIRA RTM 요구사항/테스트/결함을 로컬 SQLite DB와 동기화하여\n"
             "오프라인에서도 편리하게 관리하기 위한 도구입니다.",
         )
+
+    # ------------------------------------------------------------------ View menu handlers
+
+    def _on_toggle_local_window(self, checked: bool) -> None:
+        """
+        View > Show Local Window 체크박스에 따라 좌측(로컬) 패널 표시/숨김.
+        """
+        if self.left_panel is None:
+            return
+        self.left_panel.setVisible(checked)
+
+    def _on_toggle_online_window(self, checked: bool) -> None:
+        """
+        View > Show Online Window 체크박스에 따라 우측(온라인) 패널 표시/숨김.
+        """
+        if self.right_panel is None:
+            return
+        self.right_panel.setVisible(checked)
+
+    # ------------------------------------------------------------------ Layout mode handlers (horizontal / vertical)
+
+    def _set_layout_mode(self, mode: str) -> None:
+        """
+        중앙 스플리터의 배치를 좌/우(horiz) 또는 상/하(vert, Online/Local)로 전환한다.
+        - "horizontal":  Local | [Pull/Push] | Online
+        - "vertical"  :  Online
+                         [Pull/Push]
+                         Local
+        """
+        mode = mode.lower()
+        if mode not in ("horizontal", "vertical"):
+            return
+        if getattr(self, "layout_mode", None) == mode:
+            return
+
+        self.layout_mode = mode
+
+        splitter: QSplitter = self.main_splitter
+
+        if mode == "horizontal":
+            splitter.setOrientation(Qt.Horizontal)
+            # Left | [Pull/Push] | Right
+            splitter.insertWidget(0, self.left_panel)
+            splitter.insertWidget(1, self.mid_panel)
+            splitter.insertWidget(2, self.right_panel)
+        else:
+            splitter.setOrientation(Qt.Vertical)
+            # Top(Online) / Middle(Pull/Push) / Bottom(Local)
+            splitter.insertWidget(0, self.right_panel)
+            splitter.insertWidget(1, self.mid_panel)
+            splitter.insertWidget(2, self.left_panel)
+
+        splitter.setStretchFactor(0, 3)
+        splitter.setStretchFactor(1, 0)
+        splitter.setStretchFactor(2, 3)
+
+    def _on_set_layout_horizontal(self, checked: bool) -> None:
+        """
+        View > Layout > Left / Right 선택 시 호출.
+        """
+        if not checked:
+            # 다른 액션에 의해 해제되는 경우는 무시
+            return
+        self.act_layout_vertical.setChecked(False)
+        self.act_layout_horizontal.setChecked(True)
+        self._set_layout_mode("horizontal")
+
+    def _on_set_layout_vertical(self, checked: bool) -> None:
+        """
+        View > Layout > Top / Bottom 선택 시 호출.
+        """
+        if not checked:
+            return
+        self.act_layout_horizontal.setChecked(False)
+        self.act_layout_vertical.setChecked(True)
+        self._set_layout_mode("vertical")
 
     # ------------------------------------------------------------------ Tree context menus (right-click)
 
@@ -3968,9 +4211,15 @@ class MainWindow(QMainWindow):
             "reporter": tabs.ed_reporter.text().strip(),
             "labels": tabs.ed_labels.text().strip(),
             "components": tabs.ed_components.text().strip(),
+            "security_level": tabs.ed_security_level.text().strip(),
+            "fix_versions": tabs.ed_fix_versions.text().strip(),
+            "affects_versions": tabs.ed_affects_versions.text().strip(),
+            "epic_link": tabs.ed_epic_link.text().strip(),
+            "sprint": tabs.ed_sprint.text().strip(),
             "rtm_environment": tabs.ed_rtm_env.text().strip(),
             "due_date": tabs.ed_due_date.text().strip(),
             "description": tabs.txt_description.toPlainText().strip(),
+            "attachments": tabs.ed_attachments.text().strip(),
         }
         if issue_type == "TEST_CASE" and hasattr(tabs, "get_preconditions_text"):
             fields["preconditions"] = tabs.get_preconditions_text()
@@ -4499,6 +4748,6 @@ def run(db_path: str = "rtm_local.db", config_path: str = "jira_config.json") ->
         python main.py
     """
     app = QApplication(sys.argv)
-    win = MainWindow(db_path=db_path, config_path=config_path)
+    win = MainWindow(db_path=db_path, config_path=config_path, mode="both")
     win.show()
     sys.exit(app.exec())
