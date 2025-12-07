@@ -50,6 +50,21 @@ def _join_strings(items: Optional[List[Any]]) -> str:
     return ", ".join(str(x) for x in items)
 
 
+# --------------------------------------------------------------------------- custom field keys (Epic / Sprint 등)
+#
+# JIRA 데이터센터 환경마다 Epic Link / Sprint 필드의 ID가 다르므로,
+# 실제 사용하는 인스턴스에 맞게 아래 상수를 수정해서 사용한다.
+#
+# 예시:
+#   EPIC_LINK_FIELD_KEY = "customfield_10014"
+#   SPRINT_FIELD_KEY    = "customfield_10020"
+#
+# 설정하지 않으면(Epic/Sprint 필드 키가 None 이면) 해당 필드는 매핑에서 생략된다.
+
+EPIC_LINK_FIELD_KEY: Optional[str] = None
+SPRINT_FIELD_KEY: Optional[str] = None
+
+
 # --------------------------------------------------------------------------- pull mapping (JIRA -> local)
 
 
@@ -142,6 +157,25 @@ def map_jira_to_local(issue_type: str, jira_json: Dict[str, Any]) -> Dict[str, A
     if isinstance(affects, list):
         updates["affects_versions"] = _join_names(affects)
 
+    # Epic Link (custom field, 인스턴스별 ID 다름)
+    if EPIC_LINK_FIELD_KEY:
+        epic_val = fields.get(EPIC_LINK_FIELD_KEY)
+        if isinstance(epic_val, dict):
+            # key / name / id 중 사용 가능한 값을 우선적으로 사용
+            key = epic_val.get("key") or epic_val.get("name") or epic_val.get("id")
+            if key:
+                updates["epic_link"] = str(key)
+        elif epic_val is not None:
+            updates["epic_link"] = str(epic_val)
+
+    # Sprint (일반적으로 list 형태의 custom field)
+    if SPRINT_FIELD_KEY:
+        sprint_val = fields.get(SPRINT_FIELD_KEY)
+        if isinstance(sprint_val, list):
+            updates["sprint"] = _join_strings(sprint_val)
+        elif sprint_val is not None:
+            updates["sprint"] = str(sprint_val)
+
     # RTM Environment (일반 Jira에서는 'environment' 필드)
     env = fields.get("environment")
     if isinstance(env, dict):
@@ -222,6 +256,15 @@ def map_local_to_jira_fields(issue_type: str, local_issue: Dict[str, Any]) -> Di
     if env:
         # 문자열 그대로 세팅 (RTM에서 커스텀 필드 사용 시 이 부분을 수정)
         fields["environment"] = env
+
+    # Epic Link / Sprint (custom field 키가 설정된 경우에만 포함)
+    epic = local_issue.get("epic_link")
+    if EPIC_LINK_FIELD_KEY and epic:
+        fields[EPIC_LINK_FIELD_KEY] = epic
+
+    sprint = local_issue.get("sprint")
+    if SPRINT_FIELD_KEY and sprint:
+        fields[SPRINT_FIELD_KEY] = sprint
 
     return fields
 
@@ -528,13 +571,15 @@ def map_jira_testexecution_testcases_to_local(jira_json: Any) -> List[Dict[str, 
     """
     RTM Test Execution의 Test Case Execution 목록 JSON을 로컬 testcase_executions 용 리스트로 변환.
 
-    로컬 testcase_executions 구조:
+    로컬 testcase_executions 구조(중간 형태):
       - order_no
-      - testcase_id (-> 매핑 단계에서 local issue_id 로 바꾸어야 함)
+      - testcase_key (-> 매핑 단계에서 local issue_id 로 바꾸어야 함)
       - assignee
       - result
       - rtm_environment
       - defects (문자열)
+      - actual_time (분 단위 또는 RTM JSON 의 actualTime 값)
+      - tce_test_key (RTM Test Case Execution 의 testKey, 있으면 Step API 연동에 사용)
     """
     results: List[Dict[str, Any]] = []
 
@@ -552,7 +597,9 @@ def map_jira_testexecution_testcases_to_local(jira_json: Any) -> List[Dict[str, 
     for idx, item in enumerate(items, start=1):
         if not isinstance(item, dict):
             continue
-        key = item.get("key")
+
+        # Test Case key (필수)
+        key = item.get("testcase_key") or item.get("testCaseKey") or item.get("key")
         assignee = ""
         if isinstance(item.get("assignee"), dict):
             a = item["assignee"]
@@ -576,6 +623,16 @@ def map_jira_testexecution_testcases_to_local(jira_json: Any) -> List[Dict[str, 
             if defect_keys:
                 defects = ", ".join(defect_keys)
 
+        actual_time = item.get("actualTime") or item.get("actual_time")
+
+        # RTM Test Case Execution testKey (있을 수도, 없을 수도 있음)
+        # 실제 필드명은 RTM 버전에 따라 다를 수 있으므로 여러 후보를 보수적으로 체크한다.
+        tce_test_key = (
+            item.get("testCaseExecutionKey")
+            or item.get("tceKey")
+            or item.get("executionKey")
+        )
+
         results.append(
             {
                 "order_no": item.get("order") or item.get("orderNo") or idx,
@@ -584,6 +641,8 @@ def map_jira_testexecution_testcases_to_local(jira_json: Any) -> List[Dict[str, 
                 "result": result_val,
                 "rtm_environment": env,
                 "defects": defects,
+                "actual_time": actual_time,
+                "tce_test_key": tce_test_key,
             }
         )
 
@@ -648,6 +707,8 @@ def build_jira_testexecution_testcases_payload(local_records: List[Dict[str, Any
         if rec.get("defects"):
             # 간단히 문자열로 전달 (실제 RTM에서는 defect 링크 정보로 변환 필요)
             item["defects"] = rec["defects"]
+        if rec.get("actual_time") is not None:
+            item["actualTime"] = rec["actual_time"]
         items.append(item)
 
     return {"testCases": items}

@@ -1,0 +1,8 @@
+{
+  "rtm_environment": [
+    "DEV",
+    "QA",
+    "STAGE",
+    "PROD"
+  ]
+}

@@ -35,6 +35,7 @@
 
 
 4. REST API 사용 법: 각 이슈 타입에 대해서 아래 참조 링크 내에서 V1 API 참조할 것
+  - JIRA REST API reference: https://docs.atlassian.com/software/jira/docs/api/REST/9.12.0/
   - Authentication: https://deviniti.com/support/addon/server/requirements-test-management/latest/authentication/
   - https://deviniti.com/support/addon/server/requirements-test-management/latest/rest-api/
   - requirements: https://deviniti.com/support/addon/server/requirements-test-management/latest/rest-api-requirements/
@@ -47,9 +48,39 @@
   - example: https://deviniti.com/support/addon/server/requirements-test-management/latest/example-of-use/
 
 
+
  5. 정보
   - JIRA: data center version, v9.12.28
   - ProjectKey: KVHSICCU
   - projectId: 41500
   - parentTestKey: /rest/rtm/1.0/api/tree/{projectId}
-  - 
+  - JQL: https://support.atlassian.com/jira-software-cloud/docs/find-recent-work-items/
+
+
+6. Issue 별 설명
+6.1 Requirement
+- https://deviniti.com/support/addon/server/requirements-test-management/latest/requirement/
+- https://deviniti.com/support/addon/server/requirements-test-management/latest/create-requirement/
+- https://deviniti.com/support/addon/server/requirements-test-management/latest/bulk-linking/
+
+6.2 Test Case
+- https://deviniti.com/support/addon/server/requirements-test-management/latest/test-case/
+- https://deviniti.com/support/addon/server/requirements-test-management/latest/create-test-case/
+- https://deviniti.com/support/addon/server/requirements-test-management/latest/bulk-linking-tc/
+- https://deviniti.com/support/addon/server/requirements-test-management/latest/export-test-case/
+
+6.3 Test Plan
+- https://deviniti.com/support/addon/server/requirements-test-management/latest/test-plan/
+- https://deviniti.com/support/addon/server/requirements-test-management/latest/create-test-plan/
+- https://deviniti.com/support/addon/server/requirements-test-management/latest/manage-test-plan/
+
+6.4 Test Execution
+- https://deviniti.com/support/addon/server/requirements-test-management/latest/test-execution/
+- https://deviniti.com/support/addon/server/requirements-test-management/latest/defect/
+- https://deviniti.com/support/addon/server/requirements-test-management/latest/create_defect/
+
+
+
+
+
+

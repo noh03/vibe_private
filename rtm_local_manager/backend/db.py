@@ -82,13 +82,16 @@ def init_db(conn: sqlite3.Connection) -> None:
             created             TEXT,
             updated             TEXT,
             attachments         TEXT,
+            epic_link           TEXT,
+            sprint              TEXT,
             folder_id           TEXT REFERENCES folders(id),
             parent_issue_id     INTEGER REFERENCES issues(id),
             is_deleted          INTEGER DEFAULT 0,
             local_only          INTEGER DEFAULT 0,
             last_sync_at        TEXT,
             dirty               INTEGER DEFAULT 0,
-            preconditions       TEXT
+            preconditions       TEXT,
+            local_activity      TEXT
         );
 
         CREATE TABLE IF NOT EXISTS testcase_steps (
@@ -129,7 +132,8 @@ def init_db(conn: sqlite3.Connection) -> None:
             result              TEXT,
             actual_time         INTEGER,
             rtm_environment     TEXT,
-            defects             TEXT
+            defects             TEXT,
+            tce_test_key        TEXT
         );
         CREATE INDEX IF NOT EXISTS idx_tc_exec_te ON testcase_executions(testexecution_id);
 
@@ -171,6 +175,22 @@ def init_db(conn: sqlite3.Connection) -> None:
             cur.execute("ALTER TABLE issues ADD COLUMN preconditions TEXT")
         except sqlite3.OperationalError:
             pass
+    if "local_activity" not in issue_cols:
+        try:
+            cur.execute("ALTER TABLE issues ADD COLUMN local_activity TEXT")
+        except sqlite3.OperationalError:
+            pass
+    # Defect / Agile 연동용 필드 (Epic Link / Sprint)
+    if "epic_link" not in issue_cols:
+        try:
+            cur.execute("ALTER TABLE issues ADD COLUMN epic_link TEXT")
+        except sqlite3.OperationalError:
+            pass
+    if "sprint" not in issue_cols:
+        try:
+            cur.execute("ALTER TABLE issues ADD COLUMN sprint TEXT")
+        except sqlite3.OperationalError:
+            pass
 
     cur.execute("PRAGMA table_info(testcase_steps)")
     step_cols = [r[1] for r in cur.fetchall()]
@@ -180,12 +200,17 @@ def init_db(conn: sqlite3.Connection) -> None:
         except sqlite3.OperationalError:
             pass
 
-    # testcase_executions 에 actual_time 컬럼이 없으면 추가
+    # testcase_executions 에 actual_time / tce_test_key 컬럼이 없으면 추가
     cur.execute("PRAGMA table_info(testcase_executions)")
     tce_cols = [r[1] for r in cur.fetchall()]
     if "actual_time" not in tce_cols:
         try:
             cur.execute("ALTER TABLE testcase_executions ADD COLUMN actual_time INTEGER")
+        except sqlite3.OperationalError:
+            pass
+    if "tce_test_key" not in tce_cols:
+        try:
+            cur.execute("ALTER TABLE testcase_executions ADD COLUMN tce_test_key TEXT")
         except sqlite3.OperationalError:
             pass
 
@@ -244,6 +269,16 @@ def get_or_create_project(
             cur.execute("ALTER TABLE issues ADD COLUMN preconditions TEXT")
         except sqlite3.OperationalError:
             pass
+    if "epic_link" not in issue_cols:
+        try:
+            cur.execute("ALTER TABLE issues ADD COLUMN epic_link TEXT")
+        except sqlite3.OperationalError:
+            pass
+    if "sprint" not in issue_cols:
+        try:
+            cur.execute("ALTER TABLE issues ADD COLUMN sprint TEXT")
+        except sqlite3.OperationalError:
+            pass
 
     cur.execute("PRAGMA table_info(testcase_steps)")
     step_cols = [r[1] for r in cur.fetchall()]
@@ -253,12 +288,17 @@ def get_or_create_project(
         except sqlite3.OperationalError:
             pass
 
-    # testcase_executions 에 actual_time 컬럼이 없으면 추가
+    # testcase_executions 에 actual_time / tce_test_key 컬럼이 없으면 추가
     cur.execute("PRAGMA table_info(testcase_executions)")
     tce_cols = [r[1] for r in cur.fetchall()]
     if "actual_time" not in tce_cols:
         try:
             cur.execute("ALTER TABLE testcase_executions ADD COLUMN actual_time INTEGER")
+        except sqlite3.OperationalError:
+            pass
+    if "tce_test_key" not in tce_cols:
+        try:
+            cur.execute("ALTER TABLE testcase_executions ADD COLUMN tce_test_key TEXT")
         except sqlite3.OperationalError:
             pass
 
@@ -397,6 +437,38 @@ def fetch_folder_tree(conn: sqlite3.Connection, project_id: int) -> Dict[str, An
             roots.append(folder)
 
     return {"roots": roots}
+
+
+def move_issue_to_folder(
+    conn: sqlite3.Connection, issue_id: int, new_folder_id: Optional[int]
+) -> None:
+    """
+    이슈를 다른 폴더(또는 루트)로 이동한다.
+
+    - new_folder_id 가 None 이면 folder_id 를 NULL 로 설정하여 루트에 위치시킨다.
+    """
+    cur = conn.cursor()
+    cur.execute(
+        "UPDATE issues SET folder_id = ? WHERE id = ?",
+        (new_folder_id, issue_id),
+    )
+    conn.commit()
+
+
+def move_folder(
+    conn: sqlite3.Connection, folder_id: int, new_parent_id: Optional[int]
+) -> None:
+    """
+    폴더를 다른 부모 폴더(또는 루트)로 이동한다.
+
+    - new_parent_id 가 None 이면 parent_id 를 NULL 로 설정하여 루트에 위치시킨다.
+    """
+    cur = conn.cursor()
+    cur.execute(
+        "UPDATE folders SET parent_id = ? WHERE id = ?",
+        (new_parent_id, folder_id),
+    )
+    conn.commit()
 
 
 def get_issue_by_id(conn: sqlite3.Connection, issue_id: int) -> Optional[Dict[str, Any]]:
@@ -846,6 +918,7 @@ def get_testcase_executions(conn: sqlite3.Connection, testexecution_id: int) -> 
                t.actual_time        AS actual_time,
                t.rtm_environment    AS rtm_environment,
                t.defects            AS defects,
+               t.tce_test_key       AS tce_test_key,
                i.jira_key           AS jira_key,
                i.summary            AS summary
           FROM testcase_executions t
@@ -868,9 +941,10 @@ def replace_testcase_executions(conn: sqlite3.Connection, testexecution_id: int,
       - order_no (int)
       - assignee (str)
       - result (str)
-      - actual_time (int)
+      - actual_time (int, optional)
       - rtm_environment (str)
       - defects (str)
+      - tce_test_key (str, optional; RTM Test Case Execution key)
     """
     cur = conn.cursor()
     cur.execute("DELETE FROM testcase_executions WHERE testexecution_id = ?", (testexecution_id,))
@@ -884,11 +958,12 @@ def replace_testcase_executions(conn: sqlite3.Connection, testexecution_id: int,
             actual_time_int = int(actual_time) if actual_time not in (None, "") else 0
         except (TypeError, ValueError):
             actual_time_int = 0
+        tce_test_key = rec.get("tce_test_key") or ""
         cur.execute(
             """
             INSERT INTO testcase_executions
-                (testexecution_id, testcase_id, order_no, assignee, result, actual_time, rtm_environment, defects)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                (testexecution_id, testcase_id, order_no, assignee, result, actual_time, rtm_environment, defects, tce_test_key)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 testexecution_id,
@@ -899,10 +974,39 @@ def replace_testcase_executions(conn: sqlite3.Connection, testexecution_id: int,
                 actual_time_int,
                 rec.get("rtm_environment") or "",
                 rec.get("defects") or "",
+                tce_test_key,
             ),
         )
     conn.commit()
 
+
+# --- Single Test Case Execution helper -----------------------------------------
+
+
+def get_testcase_execution_by_id(conn: sqlite3.Connection, tce_id: int) -> Dict[str, Any] | None:
+    """
+    단일 Test Case Execution 레코드를 id 기준으로 조회한다.
+    """
+    cur = conn.cursor()
+    cur.execute(
+        """
+        SELECT id,
+               testexecution_id,
+               testcase_id,
+               order_no,
+               assignee,
+               result,
+               actual_time,
+               rtm_environment,
+               defects,
+               tce_test_key
+          FROM testcase_executions
+         WHERE id = ?
+        """,
+        (tce_id,),
+    )
+    row = cur.fetchone()
+    return dict(row) if row else None
 
 # --- Test Case Step Execution helpers -------------------------------------------
 
