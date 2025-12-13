@@ -4560,6 +4560,7 @@ class MainWindow(QMainWindow):
         - 사용자가 임의의 메서드/경로/바디를 입력해서 REST 호출을 시험할 수 있는 다이얼로그.
         - 현재 jira_config 의 base_url / auth 를 사용한다.
         """
+        from PySide6.QtCore import Qt
         from PySide6.QtWidgets import (
             QDialog,
             QVBoxLayout,
@@ -4571,6 +4572,8 @@ class MainWindow(QMainWindow):
             QPushButton,
             QDialogButtonBox,
             QMessageBox,
+            QSplitter,
+            QWidget,
         )
         from requests.auth import HTTPBasicAuth
         import requests
@@ -4608,22 +4611,41 @@ class MainWindow(QMainWindow):
         row_top.addWidget(ed_path)
         vbox.addLayout(row_top)
 
-        # Request body
-        vbox.addWidget(QLabel("Request Body (JSON/text, 선택 사항):"))
-        ed_body = QPlainTextEdit()
-        vbox.addWidget(ed_body)
-
         # Send 버튼
         btn_send = QPushButton("Send Request")
         vbox.addWidget(btn_send)
 
-        # Response 표시
+        # Status 표시
         lbl_status = QLabel("Status: -")
         vbox.addWidget(lbl_status)
-        vbox.addWidget(QLabel("Response Body:"))
+
+        # Request Body와 Response Body를 QSplitter로 감싸서 높이 조정 가능하게
+        splitter = QSplitter(Qt.Vertical)
+        
+        # Request Body 영역
+        req_widget = QWidget()
+        req_layout = QVBoxLayout(req_widget)
+        req_layout.setContentsMargins(0, 0, 0, 0)
+        req_layout.addWidget(QLabel("Request Body (JSON/text, 선택 사항):"))
+        ed_body = QPlainTextEdit()
+        req_layout.addWidget(ed_body)
+        splitter.addWidget(req_widget)
+        
+        # Response Body 영역
+        resp_widget = QWidget()
+        resp_layout = QVBoxLayout(resp_widget)
+        resp_layout.setContentsMargins(0, 0, 0, 0)
+        resp_layout.addWidget(QLabel("Response Body:"))
         ed_resp = QPlainTextEdit()
         ed_resp.setReadOnly(True)
-        vbox.addWidget(ed_resp)
+        resp_layout.addWidget(ed_resp)
+        splitter.addWidget(resp_widget)
+        
+        # Splitter의 초기 비율 설정 (Request:Response = 1:1)
+        splitter.setStretchFactor(0, 1)
+        splitter.setStretchFactor(1, 1)
+        
+        vbox.addWidget(splitter)
 
         btn_box = QDialogButtonBox(QDialogButtonBox.Close)
         vbox.addWidget(btn_box)
