@@ -7428,7 +7428,7 @@ class MainWindow(QMainWindow):
             self.left_panel.btn_link_requirement.clicked.connect(self.on_link_testcases_to_requirement_clicked)
         if hasattr(self.left_panel, "btn_execute_tc"):
             self.left_panel.btn_execute_tc.clicked.connect(self.on_execute_testcase_clicked)
-    
+
     def on_execute_testcase_clicked(self):
         """
         로컬 패널의 Test Case Execute 버튼 클릭 시:
@@ -7667,9 +7667,9 @@ class MainWindow(QMainWindow):
             # 온라인 패널 헤더 버튼
             self.right_panel.btn_refresh.clicked.connect(self.on_refresh_online_tree)
             self.right_panel.btn_sync_down.clicked.connect(self.on_full_sync_clicked)
-            # 온라인 패널의 "Create in JIRA" 버튼: 새 이슈 생성 (온라인 패널 전용)
             self.right_panel.btn_create_jira.clicked.connect(self.on_create_new_online_issue_clicked)
-            self.right_panel.btn_save_jira.clicked.connect(self.on_save_online_issue_clicked)
+            if hasattr(self.right_panel, "btn_save_jira"):
+                self.right_panel.btn_save_jira.clicked.connect(self.on_save_online_issue_clicked)
             self.right_panel.btn_delete_jira.clicked.connect(self.on_delete_in_jira_clicked)
             
             # 온라인 패널 트리 툴바 버튼 (있는 경우)
