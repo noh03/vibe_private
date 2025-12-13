@@ -5762,40 +5762,66 @@ class MainWindow(QMainWindow):
         오른쪽(JIRA RTM Online) 트리에서 이슈를 선택했을 때,
         해당 이슈의 상세 정보를 JIRA REST/RTM API 로 조회하여 우측 이슈 탭에 표시한다.
         """
+        self.logger.info("=" * 80)
+        self.logger.info("[EVENT] on_online_tree_selection_changed 호출됨")
+        self.logger.info(f"[EVENT] selected indexes: {[idx.row() for idx in selected.indexes()] if selected else 'None'}")
+        self.logger.info(f"[EVENT] deselected indexes: {[idx.row() for idx in deselected.indexes()] if deselected else 'None'}")
+        
         if not self.jira_available or not self.jira_client:
+            self.logger.warning("[EVENT] ❌ jira_available=False 또는 jira_client=None, 종료")
             return
 
+        self.logger.info("[EVENT] ✅ JIRA 사용 가능, 계속 진행")
+        
         model = self.right_panel.tree_view.model()
         if model is None:
+            self.logger.warning("[EVENT] ❌ tree_view.model()이 None, 종료")
             self.right_panel.issue_tabs.set_issue(None)
             return
 
+        self.logger.info("[EVENT] ✅ tree_view.model() 존재")
+        
         selection_model = self.right_panel.tree_view.selectionModel()
         if selection_model is None:
+            self.logger.warning("[EVENT] ❌ tree_view.selectionModel()이 None, 종료")
             self.right_panel.issue_tabs.set_issue(None)
             return
 
+        self.logger.info("[EVENT] ✅ tree_view.selectionModel() 존재")
+        
         selected_indexes = selection_model.selectedIndexes()
+        self.logger.info(f"[EVENT] selected_indexes 개수: {len(selected_indexes)}")
         if not selected_indexes:
+            self.logger.info("[EVENT] 선택된 인덱스 없음, 이슈 초기화")
             self.right_panel.issue_tabs.set_issue(None)
             return
 
+        self.logger.info(f"[EVENT] 첫 번째 선택 인덱스: row={selected_indexes[0].row()}, column={selected_indexes[0].column()}")
+        
         item = model.itemFromIndex(selected_indexes[0])
         if not item:
+            self.logger.warning("[EVENT] ❌ model.itemFromIndex()가 None 반환, 종료")
             self.right_panel.issue_tabs.set_issue(None)
             return
 
+        self.logger.info(f"[EVENT] ✅ item 획득: text='{item.text()}'")
+        
         node_type = (item.data(Qt.UserRole) or "").upper()
         jira_key = item.data(Qt.UserRole + 1) or ""
+        
+        self.logger.info(f"[EVENT] node_type (Qt.UserRole): '{node_type}'")
+        self.logger.info(f"[EVENT] jira_key (Qt.UserRole+1): '{jira_key}'")
 
         # 폴더는 무시
         if node_type == "FOLDER" or not jira_key:
+            self.logger.info(f"[EVENT] 폴더이거나 jira_key가 없음: node_type='{node_type}', jira_key='{jira_key}', 종료")
             self.right_panel.issue_tabs.set_issue(None)
             self.current_online_issue_key = None
             self.current_online_issue_type = None
             return
 
         issue_type = node_type  # RTM Tree 에서 오는 type 을 그대로 사용
+        self.logger.info(f"[EVENT] ✅ 이슈 노드 확인: issue_type='{issue_type}', jira_key='{jira_key}'")
         
         # 온라인 이슈 추적
         self.current_online_issue_key = jira_key
@@ -5827,23 +5853,37 @@ class MainWindow(QMainWindow):
         tabs = self.right_panel.issue_tabs
 
         try:
+            self.logger.info(f"[API] RTM API 호출 시작: issue_type='{issue_type}', jira_key='{jira_key}'")
             self.status_bar.showMessage(f"Loading online issue {jira_key}...")
             QApplication.setOverrideCursor(Qt.WaitCursor)
             
             # RTM API로 직접 이슈 조회
+            self.logger.info(f"[API] get_entity() 호출 전")
             rtm_json = self.jira_client.get_entity(issue_type, jira_key)
+            self.logger.info(f"[API] get_entity() 호출 완료, 응답 타입: {type(rtm_json)}")
+            
             if not rtm_json:
+                self.logger.error(f"[API] ❌ RTM API 응답이 None 또는 빈 값")
                 self.right_panel.issue_tabs.set_issue(None)
                 self.status_bar.showMessage(f"Failed to load issue {jira_key}: No data returned")
                 return
             
+            self.logger.info(f"[API] ✅ RTM API 응답 수신, 키 개수: {len(rtm_json) if isinstance(rtm_json, dict) else 'N/A'}")
+            if isinstance(rtm_json, dict):
+                self.logger.debug(f"[API] RTM 응답 키: {list(rtm_json.keys())[:20]}...")
+                self.logger.debug(f"[API] RTM 응답 testKey: {rtm_json.get('testKey')}")
+                self.logger.debug(f"[API] RTM 응답 summary: {rtm_json.get('summary', '')[:100]}...")
+            
             # RTM 응답을 로컬 형식으로 변환 (rtm_json은 나중에 Test Execution 메타 정보에 사용)
+            self.logger.info(f"[MAP] map_rtm_to_local() 호출 시작: issue_type='{issue_type}'")
             updates = jira_mapping.map_rtm_to_local(issue_type, rtm_json)
+            self.logger.info(f"[MAP] map_rtm_to_local() 완료, updates 키: {list(updates.keys())[:20]}...")
             
             # _rtm_ 접두사가 붙은 필드들을 일반 필드로 변환 (set_issue에서 사용)
             # Test Case의 preconditions
             if "_rtm_preconditions" in updates:
                 updates["preconditions"] = updates.pop("_rtm_preconditions")
+                self.logger.info(f"[MAP] preconditions 변환 완료")
             
             issue_like: Dict[str, Any] = {
                 "issue_type": issue_type,
@@ -5852,14 +5892,19 @@ class MainWindow(QMainWindow):
             }
             
             # 디버깅: 로드된 데이터 확인
-            self.logger.info(f"[DEBUG] 온라인 이슈 로드: {jira_key}, 타입: {issue_type}")
-            self.logger.debug(f"[DEBUG] issue_like 키: {list(issue_like.keys())}")
-            self.logger.debug(f"[DEBUG] summary: {issue_like.get('summary')}")
-            self.logger.debug(f"[DEBUG] description: {issue_like.get('description', '')[:100]}...")
+            self.logger.info(f"[DATA] issue_like 생성 완료: jira_key='{jira_key}', issue_type='{issue_type}'")
+            self.logger.info(f"[DATA] issue_like 키 개수: {len(issue_like)}")
+            self.logger.info(f"[DATA] summary: '{issue_like.get('summary', '')[:100]}...'")
+            self.logger.info(f"[DATA] description 길이: {len(str(issue_like.get('description', '')))}")
+            self.logger.info(f"[DATA] status: '{issue_like.get('status', '')}'")
+            self.logger.info(f"[DATA] priority: '{issue_like.get('priority', '')}'")
+            self.logger.info(f"[DATA] assignee: '{issue_like.get('assignee', '')}'")
             
             # set_issue 호출하여 Details 탭 필드 채우기 및 탭 구성 업데이트
             # 이 메서드는 update_tabs_for_issue_type을 호출하여 이슈 타입에 맞는 탭만 표시합니다
+            self.logger.info(f"[UI] tabs.set_issue() 호출 시작")
             tabs.set_issue(issue_like)
+            self.logger.info(f"[UI] tabs.set_issue() 호출 완료")
             
             # Details 탭이 첫 번째 탭이므로 자동으로 선택되도록 보장
             if hasattr(tabs, "setCurrentIndex"):
@@ -5888,15 +5933,24 @@ class MainWindow(QMainWindow):
             
             # Test Case: steps → Steps 탭, preconditions는 이미 set_issue에서 처리됨
             elif issue_type_upper == "TEST_CASE":
+                self.logger.info(f"[TABS] TEST_CASE 처리 시작")
                 # Steps
                 steps = updates.get("_rtm_steps", [])
+                self.logger.info(f"[TABS] Steps 개수: {len(steps)}")
                 if steps and hasattr(tabs, "load_steps"):
+                    self.logger.info(f"[TABS] load_steps() 호출")
                     tabs.load_steps(steps)
+                    self.logger.info(f"[TABS] load_steps() 완료")
+                else:
+                    self.logger.warning(f"[TABS] Steps 로드 실패: steps={len(steps) if steps else 0}, hasattr(load_steps)={hasattr(tabs, 'load_steps')}")
             
             # Test Plan: includedTestCases → Test Cases 탭
             elif issue_type_upper == "TEST_PLAN":
+                self.logger.info(f"[TABS] TEST_PLAN 처리 시작")
                 included_test_cases = updates.get("_rtm_includedTestCases", [])
+                self.logger.info(f"[TABS] includedTestCases 개수: {len(included_test_cases)}")
                 if included_test_cases and hasattr(tabs, "load_testplan_testcases"):
+                    self.logger.info(f"[TABS] load_testplan_testcases() 호출")
                     # includedTestCases는 [{testKey}, ...] 형태
                     testplan_tc_records = []
                     for idx, tc in enumerate(included_test_cases, start=1):
@@ -5915,8 +5969,11 @@ class MainWindow(QMainWindow):
             
             # Test Execution: testCaseExecutions → Executions 탭
             elif issue_type_upper == "TEST_EXECUTION":
+                self.logger.info(f"[TABS] TEST_EXECUTION 처리 시작")
                 test_case_executions = updates.get("_rtm_testCaseExecutions", [])
+                self.logger.info(f"[TABS] testCaseExecutions 개수: {len(test_case_executions)}")
                 if test_case_executions and hasattr(tabs, "load_testexecution"):
+                    self.logger.info(f"[TABS] load_testexecution() 호출")
                     # testCaseExecutions는 [{testKey, summary, result, assigneeId, ...}, ...] 형태
                     execution_records = []
                     for idx, tce in enumerate(test_case_executions, start=1):
@@ -5959,8 +6016,11 @@ class MainWindow(QMainWindow):
             
             # Defect: identifyingTestCases → Test Cases 탭
             elif issue_type_upper == "DEFECT":
+                self.logger.info(f"[TABS] DEFECT 처리 시작")
                 identifying_test_cases = updates.get("_rtm_identifyingTestCases", [])
+                self.logger.info(f"[TABS] identifyingTestCases 개수: {len(identifying_test_cases)}")
                 if identifying_test_cases:
+                    self.logger.info(f"[TABS] load_linked_testcases() 호출")
                     # identifyingTestCases는 [{testKey, issueId}, ...] 형태
                     # load_linked_testcases 형식으로 변환
                     test_case_records = []
@@ -5976,9 +6036,13 @@ class MainWindow(QMainWindow):
                         tabs.load_linked_testcases(test_case_records)
             
             # Relations (Jira issue links) - JIRA 표준 API로 조회
+            self.logger.info(f"[REL] Relations 로드 시작")
             try:
+                self.logger.info(f"[REL] get_jira_issue() 호출: jira_key='{jira_key}'")
                 jira_issue_json = self.jira_client.get_jira_issue(jira_key)
+                self.logger.info(f"[REL] get_jira_issue() 완료")
                 rel_entries = jira_mapping.extract_relations_from_jira(jira_issue_json)
+                self.logger.info(f"[REL] Relations 개수: {len(rel_entries)}")
                 if hasattr(tabs, "load_relations"):
                     rels_for_ui = []
                     for r in rel_entries:
@@ -5990,22 +6054,26 @@ class MainWindow(QMainWindow):
                                 "dst_summary": r.get("dst_summary") or "",
                             }
                         )
+                    self.logger.info(f"[REL] load_relations() 호출: {len(rels_for_ui)}개")
                     tabs.load_relations(rels_for_ui)
+                    self.logger.info(f"[REL] load_relations() 완료")
+                else:
+                    self.logger.warning(f"[REL] tabs에 load_relations 메서드 없음")
             except Exception as e_rel:
-                self.logger.warning(f"Failed to load online relations: {e_rel}")
+                self.logger.warning(f"[REL] ❌ Relations 로드 실패: {e_rel}", exc_info=True)
             
             # Details 탭이 첫 번째 탭이므로 자동으로 선택되도록 보장
             # update_tabs_for_issue_type에서 이미 처리하지만, 명시적으로 보장
+            self.logger.info(f"[UI] Details 탭으로 전환 시도")
             if hasattr(tabs, "setCurrentWidget") and hasattr(tabs, "details_tab"):
                 tabs.setCurrentWidget(tabs.details_tab)
-            
-            # Details 탭이 첫 번째 탭이므로 자동으로 선택되도록 보장
-            # update_tabs_for_issue_type에서 이미 처리하지만, 명시적으로 보장
-            if hasattr(tabs, "setCurrentWidget") and hasattr(tabs, "details_tab"):
-                tabs.setCurrentWidget(tabs.details_tab)
+                self.logger.info(f"[UI] ✅ Details 탭으로 전환 완료")
+            else:
+                self.logger.warning(f"[UI] ❌ Details 탭 전환 실패: setCurrentWidget={hasattr(tabs, 'setCurrentWidget')}, details_tab={hasattr(tabs, 'details_tab')}")
             
             self.status_bar.showMessage(f"Loaded online issue {jira_key}")
-            self.logger.info(f"[DEBUG] ✅ 온라인 이슈 로드 완료: {jira_key}, 탭 전환 완료")
+            self.logger.info(f"[COMPLETE] ✅✅✅ 온라인 이슈 로드 완료: {jira_key}, 탭 전환 완료")
+            self.logger.info("=" * 80)
 
         except Exception as e:
             self.status_bar.showMessage(f"Failed to load online issue {jira_key}: {e}")
@@ -6190,6 +6258,20 @@ class MainWindow(QMainWindow):
             self.right_panel.tree_view.setModel(model)
             self.right_panel.tree_view.expandAll()
             self.right_panel.tree_view.setSelectionMode(QTreeView.ExtendedSelection)
+            
+            # 모델이 변경되면 selectionModel도 새로 생성되므로 시그널을 다시 연결해야 함
+            self.logger.info("[TREE] 온라인 트리 모델 설정 완료, selectionChanged 시그널 재연결 시도")
+            r_selection = self.right_panel.tree_view.selectionModel()
+            if r_selection is not None:
+                # 기존 연결을 제거하고 새로 연결 (중복 방지)
+                try:
+                    r_selection.selectionChanged.disconnect(self.on_online_tree_selection_changed)
+                except:
+                    pass  # 연결이 없었을 수도 있음
+                r_selection.selectionChanged.connect(self.on_online_tree_selection_changed)
+                self.logger.info("[TREE] ✅ 온라인 트리 selectionChanged 시그널 재연결 완료")
+            else:
+                self.logger.warning("[TREE] ❌ 온라인 트리 selectionModel이 None, 시그널 연결 실패")
 
             self.status_bar.showMessage("Online RTM tree refreshed.")
         except Exception as e:
@@ -7420,7 +7502,11 @@ class MainWindow(QMainWindow):
             # 온라인 패널 트리 selection
             r_selection = self.right_panel.tree_view.selectionModel()
             if r_selection is not None:
+                self.logger.info("[SIGNAL] 온라인 트리뷰 selectionChanged 시그널 연결 시도")
                 r_selection.selectionChanged.connect(self.on_online_tree_selection_changed)
+                self.logger.info("[SIGNAL] ✅ 온라인 트리뷰 selectionChanged 시그널 연결 완료")
+            else:
+                self.logger.warning("[SIGNAL] ❌ 온라인 트리뷰 selectionModel이 None, 시그널 연결 실패")
 
         # Local panel 트리 selection
         selection_model = self.left_panel.tree_view.selectionModel()
