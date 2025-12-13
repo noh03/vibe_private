@@ -754,3 +754,6 @@ FileNotFoundError: [Errno 2] No such file or directory: 'c:\\Users\\sonic\\Docum
 2025-12-08 00:17:49 [INFO] rtm.gui.main_window - MainWindow init: db_path=c:\Users\sonic\Documents\GitHub\vibe_private\rtm_local_manager\rtm_local.db, config_path=c:\Users\sonic\Documents\GitHub\vibe_private\rtm_local_manager\jira_config.json, mode=local
 2025-12-08 00:17:49 [WARNING] rtm.gui.main_window - Jira config loaded but base_url is a placeholder 'https://your-jira-server.example.com'; JIRA integration disabled.
 2025-12-08 00:17:50 [DEBUG] rtm.gui.main_window - Local tree_view selectionModel is None at _connect_signals; will be connected after model set.
+2025-12-13 22:05:34 [INFO] rtm.gui.main_window - MainWindow init: db_path=c:\Users\cjh81\OneDrive\문서\GitHub\vibe_private\rtm_local_manager\rtm_local.db, config_path=c:\Users\cjh81\OneDrive\문서\GitHub\vibe_private\rtm_local_manager\jira_config.json, mode=local
+2025-12-13 22:05:34 [WARNING] rtm.gui.main_window - Jira config loaded but base_url is a placeholder 'https://your-jira-server.example.com'; JIRA integration disabled.
+2025-12-13 22:05:34 [DEBUG] rtm.gui.main_window - Local tree_view selectionModel is None at _connect_signals; will be connected after model set.
