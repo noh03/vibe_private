@@ -204,18 +204,76 @@ class JiraRTMClient:
         auth = HTTPBasicAuth(self.config.username, self.config.api_token)
         if headers is None:
             headers = self._headers()
-        self.logger.debug(
-            "JIRA request %s %s kwargs=%s",
-            method,
-            url,
-            {k: v for k, v in kwargs.items() if k != "json"},
-        )
+
+        # ----------------------------- 상세 요청 로깅 -----------------------------
+        # - Authorization 과 같이 민감한 헤더는 마스킹
+        # - files 인자는 파일 경로/키만 로그에 남기고 실제 바이너리 내용은 출력하지 않음
+        safe_headers: Dict[str, Any] = {}
+        for k, v in (headers or {}).items():
+            if k.lower() == "authorization":
+                safe_headers[k] = "***"
+            else:
+                safe_headers[k] = v
+
+        json_payload = kwargs.get("json")
+        params = kwargs.get("params")
+        files = kwargs.get("files")
+
+        safe_files: Dict[str, Any] | None = None
+        if isinstance(files, dict):
+            # {"file": (filename, fileobj, ...)} 형태를 사람이 읽을 수 있는 정보만 남김
+            safe_files = {}
+            for fk, fv in files.items():
+                try:
+                    if isinstance(fv, (list, tuple)) and fv:
+                        fname = getattr(fv[0], "name", str(fv[0]))
+                        safe_files[fk] = f"<file: {fname}>"
+                    else:
+                        safe_files[fk] = str(fv)
+                except Exception:
+                    safe_files[fk] = "<unprintable>"
+
+        self.logger.debug("JIRA request %s %s", method, url)
+        self.logger.debug("  headers=%s", safe_headers)
+        if params is not None:
+            self.logger.debug("  params=%s", params)
+        if json_payload is not None:
+            try:
+                self.logger.debug(
+                    "  json=%s",
+                    json.dumps(json_payload, ensure_ascii=False),
+                )
+            except Exception:
+                # json.dumps 가 실패하면 repr 로라도 남긴다.
+                self.logger.debug("  json(repr)=%r", json_payload)
+        if safe_files is not None:
+            self.logger.debug("  files=%s", safe_files)
+        # 나머지 kwargs (timeout, data 등)
+        other_kwargs = {
+            k: v for k, v in kwargs.items() if k not in {"json", "params", "files"}
+        }
+        if other_kwargs:
+            self.logger.debug("  other_kwargs=%s", other_kwargs)
+
         # 네트워크 장애 시 GUI 가 오래 멈추지 않도록, 보수적인 기본 timeout 을 부여한다.
         if "timeout" not in kwargs:
             kwargs["timeout"] = 5.0
 
         resp = requests.request(method, url, headers=headers, auth=auth, **kwargs)
+        # ----------------------------- 응답 로깅 -----------------------------
         self.logger.debug("JIRA response status=%s", resp.status_code)
+        try:
+            self.logger.debug("  response_headers=%s", dict(resp.headers))
+        except Exception:
+            # headers 가 매핑이 아닐 경우를 대비
+            self.logger.debug("  response_headers(unprintable)")
+        # text 는 JSON 이든 아니든 문자열로 확인 가능하므로 그대로 출력
+        # (대용량 응답일 경우 로그가 길어질 수 있으나, 문제 추적에는 도움이 된다)
+        try:
+            self.logger.debug("  response_text=%s", resp.text)
+        except Exception:
+            self.logger.debug("  response_text=<unprintable>")
+
         try:
             resp.raise_for_status()
         except Exception:
