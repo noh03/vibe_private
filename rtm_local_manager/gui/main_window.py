@@ -5814,44 +5814,57 @@ class MainWindow(QMainWindow):
                 self.status_bar.showMessage(f"Failed to load issue {jira_key}: No data returned")
                 return
             
-            # RTM 응답을 로컬 형식으로 변환
+            # RTM 응답을 로컬 형식으로 변환 (rtm_json은 나중에 Test Execution 메타 정보에 사용)
             updates = jira_mapping.map_rtm_to_local(issue_type, rtm_json)
+            
+            # _rtm_ 접두사가 붙은 필드들을 일반 필드로 변환 (set_issue에서 사용)
+            # Test Case의 preconditions
+            if "_rtm_preconditions" in updates:
+                updates["preconditions"] = updates.pop("_rtm_preconditions")
+            
             issue_like: Dict[str, Any] = {
                 "issue_type": issue_type,
                 "jira_key": jira_key,
                 **updates,
             }
+            
+            # set_issue 호출하여 Details 탭 필드 채우기 및 탭 구성 업데이트
+            # 이 메서드는 update_tabs_for_issue_type을 호출하여 이슈 타입에 맞는 탭만 표시합니다
             tabs.set_issue(issue_like)
             
-            # 이슈 타입별 추가 데이터 로드
+            # 이슈 타입별 추가 데이터 로드 (각 탭에 데이터 표시)
             issue_type_upper = issue_type.upper()
             
-            # Requirement: testCasesCovered
+            # Requirement: testCasesCovered → Test Cases 탭
             if issue_type_upper == "REQUIREMENT":
                 test_cases_covered = updates.get("_rtm_testCasesCovered", [])
-                if hasattr(tabs, "load_testcases_covered"):
-                    tabs.load_testcases_covered(test_cases_covered)
-                elif hasattr(tabs, "load_test_cases"):
-                    # Test Cases 탭에 표시
-                    tabs.load_test_cases(test_cases_covered)
+                if test_cases_covered:
+                    # testCasesCovered는 [{testKey, issueId}, ...] 형태
+                    # load_linked_testcases 형식으로 변환
+                    test_case_records = []
+                    for tc in test_cases_covered:
+                        if isinstance(tc, dict):
+                            test_case_records.append({
+                                "dst_issue_id": None,
+                                "dst_jira_key": tc.get("testKey") or "",
+                                "dst_summary": "",
+                                "relation_type": "Covers",
+                            })
+                    if hasattr(tabs, "load_linked_testcases"):
+                        tabs.load_linked_testcases(test_case_records)
             
-            # Test Case: steps, preconditions
+            # Test Case: steps → Steps 탭, preconditions는 이미 set_issue에서 처리됨
             elif issue_type_upper == "TEST_CASE":
                 # Steps
                 steps = updates.get("_rtm_steps", [])
-                if hasattr(tabs, "load_steps"):
+                if steps and hasattr(tabs, "load_steps"):
                     tabs.load_steps(steps)
-                
-                # Preconditions
-                preconditions = updates.get("_rtm_preconditions", "")
-                if hasattr(tabs, "load_preconditions"):
-                    tabs.load_preconditions(preconditions)
             
-            # Test Plan: includedTestCases
+            # Test Plan: includedTestCases → Test Cases 탭
             elif issue_type_upper == "TEST_PLAN":
                 included_test_cases = updates.get("_rtm_includedTestCases", [])
-                if hasattr(tabs, "load_testplan_testcases"):
-                    # includedTestCases를 testplan_testcases 형식으로 변환
+                if included_test_cases and hasattr(tabs, "load_testplan_testcases"):
+                    # includedTestCases는 [{testKey}, ...] 형태
                     testplan_tc_records = []
                     for idx, tc in enumerate(included_test_cases, start=1):
                         if isinstance(tc, dict):
@@ -5862,46 +5875,72 @@ class MainWindow(QMainWindow):
                             testplan_tc_records.append({
                                 "order_no": idx,
                                 "testcase_id": None,  # 온라인에서는 ID가 없음
-                                "testcase_jira_key": test_key,
+                                "jira_key": test_key,  # load_testplan_testcases가 기대하는 필드명
                                 "summary": "",
                             })
                     tabs.load_testplan_testcases(testplan_tc_records)
             
-            # Test Execution: testCaseExecutions, testPlan
+            # Test Execution: testCaseExecutions → Executions 탭
             elif issue_type_upper == "TEST_EXECUTION":
                 test_case_executions = updates.get("_rtm_testCaseExecutions", [])
-                if hasattr(tabs, "load_testexecution_testcases"):
-                    # testCaseExecutions를 testcase_executions 형식으로 변환
+                if test_case_executions and hasattr(tabs, "load_testexecution"):
+                    # testCaseExecutions는 [{testKey, summary, result, assigneeId, ...}, ...] 형태
                     execution_records = []
                     for idx, tce in enumerate(test_case_executions, start=1):
                         if isinstance(tce, dict):
+                            result_obj = tce.get("result")
+                            result_name = ""
+                            if isinstance(result_obj, dict):
+                                result_name = result_obj.get("name") or result_obj.get("statusName") or ""
+                            
+                            # load_testexecution이 기대하는 형식: jira_key 필드 사용
                             execution_records.append({
                                 "order_no": idx,
                                 "testcase_id": None,
-                                "testcase_jira_key": tce.get("testKey") or "",
+                                "jira_key": tce.get("testKey") or "",  # testcase_jira_key가 아닌 jira_key
                                 "summary": tce.get("summary") or "",
                                 "assignee": tce.get("assigneeId") or "",
-                                "result": tce.get("result", {}).get("name") if isinstance(tce.get("result"), dict) else "",
+                                "result": result_name,
                                 "rtm_environment": "",
                                 "defects": "",
                                 "actual_time": tce.get("actualTime") or 0,
                             })
-                    tabs.load_testexecution_testcases(execution_records)
+                    
+                    # Test Execution 메타 정보 (rtm_json에서 직접 가져오기)
+                    te_meta = {
+                        "environment": rtm_json.get("environment") or "",
+                        "start_date": "",
+                        "end_date": "",
+                        "result": (rtm_json.get("result", {}).get("name") if isinstance(rtm_json.get("result"), dict) else "") or "",
+                        "executed_by": rtm_json.get("assigneeId") or "",
+                    }
+                    
+                    tabs.load_testexecution(te_meta, execution_records)
                 
-                # Test Plan 정보
+                # Test Plan 정보는 Details 탭에 표시할 수 있음 (필요시)
                 test_plan = updates.get("_rtm_testPlan")
                 if test_plan and isinstance(test_plan, dict):
                     test_plan_key = test_plan.get("testKey") or ""
-                    if hasattr(tabs, "set_test_plan"):
-                        tabs.set_test_plan(test_plan_key)
+                    # testPlan 정보를 description이나 별도 필드에 표시할 수 있음
+                    # 현재는 별도 처리 없음
             
-            # Defect: identifyingTestCases
+            # Defect: identifyingTestCases → Test Cases 탭
             elif issue_type_upper == "DEFECT":
                 identifying_test_cases = updates.get("_rtm_identifyingTestCases", [])
-                if hasattr(tabs, "load_identifying_testcases"):
-                    tabs.load_identifying_testcases(identifying_test_cases)
-                elif hasattr(tabs, "load_test_cases"):
-                    tabs.load_test_cases(identifying_test_cases)
+                if identifying_test_cases:
+                    # identifyingTestCases는 [{testKey, issueId}, ...] 형태
+                    # load_linked_testcases 형식으로 변환
+                    test_case_records = []
+                    for tc in identifying_test_cases:
+                        if isinstance(tc, dict):
+                            test_case_records.append({
+                                "dst_issue_id": None,
+                                "dst_jira_key": tc.get("testKey") or "",
+                                "dst_summary": "",
+                                "relation_type": "Identified by",
+                            })
+                    if hasattr(tabs, "load_linked_testcases"):
+                        tabs.load_linked_testcases(test_case_records)
             
             # Relations (Jira issue links) - JIRA 표준 API로 조회
             try:
