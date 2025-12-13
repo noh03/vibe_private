@@ -13,6 +13,7 @@ jira_api.py - REST client wrapper for JIRA RTM (Deviniti RTM for Jira Data Cente
   조정해야 한다.
 """
 
+
 from __future__ import annotations
 
 from dataclasses import dataclass, field
