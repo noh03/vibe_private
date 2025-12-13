@@ -5801,6 +5801,29 @@ class MainWindow(QMainWindow):
         self.current_online_issue_key = jira_key
         self.current_online_issue_type = issue_type
 
+        # 이슈 타입에 맞는 모듈 탭(최상위 탭) 자동 선택
+        # 모듈 탭 인덱스: 0=Dashboard, 1=Requirements, 2=Test Cases, 3=Test Plans, 4=Test Executions, 5=Defects
+        issue_type_to_tab_index = {
+            "REQUIREMENT": 1,  # Requirements
+            "TEST_CASE": 2,    # Test Cases
+            "TEST_PLAN": 3,    # Test Plans
+            "TEST_EXECUTION": 4,  # Test Executions
+            "DEFECT": 5,       # Defects
+        }
+        target_tab_index = issue_type_to_tab_index.get(issue_type.upper())
+        if target_tab_index is not None:
+            # 현재 선택된 탭과 다를 때만 변경 (무한 루프 방지)
+            current_tab_index = self.right_panel.module_tab_bar.currentIndex()
+            if current_tab_index != target_tab_index:
+                # 시그널 연결을 일시적으로 차단하여 트리 새로고침 방지
+                self.right_panel.module_tab_bar.blockSignals(True)
+                try:
+                    self.right_panel.module_tab_bar.setCurrentIndex(target_tab_index)
+                    # online_issue_type_filter도 업데이트
+                    self.online_issue_type_filter = issue_type
+                finally:
+                    self.right_panel.module_tab_bar.blockSignals(False)
+
         tabs = self.right_panel.issue_tabs
 
         try:
@@ -5828,9 +5851,19 @@ class MainWindow(QMainWindow):
                 **updates,
             }
             
+            # 디버깅: 로드된 데이터 확인
+            self.logger.info(f"[DEBUG] 온라인 이슈 로드: {jira_key}, 타입: {issue_type}")
+            self.logger.debug(f"[DEBUG] issue_like 키: {list(issue_like.keys())}")
+            self.logger.debug(f"[DEBUG] summary: {issue_like.get('summary')}")
+            self.logger.debug(f"[DEBUG] description: {issue_like.get('description', '')[:100]}...")
+            
             # set_issue 호출하여 Details 탭 필드 채우기 및 탭 구성 업데이트
             # 이 메서드는 update_tabs_for_issue_type을 호출하여 이슈 타입에 맞는 탭만 표시합니다
             tabs.set_issue(issue_like)
+            
+            # Details 탭이 첫 번째 탭이므로 자동으로 선택되도록 보장
+            if hasattr(tabs, "setCurrentIndex"):
+                tabs.setCurrentIndex(0)  # Details 탭으로 전환
             
             # 이슈 타입별 추가 데이터 로드 (각 탭에 데이터 표시)
             issue_type_upper = issue_type.upper()
@@ -5961,12 +5994,24 @@ class MainWindow(QMainWindow):
             except Exception as e_rel:
                 self.logger.warning(f"Failed to load online relations: {e_rel}")
             
+            # Details 탭이 첫 번째 탭이므로 자동으로 선택되도록 보장
+            # update_tabs_for_issue_type에서 이미 처리하지만, 명시적으로 보장
+            if hasattr(tabs, "setCurrentWidget") and hasattr(tabs, "details_tab"):
+                tabs.setCurrentWidget(tabs.details_tab)
+            
+            # Details 탭이 첫 번째 탭이므로 자동으로 선택되도록 보장
+            # update_tabs_for_issue_type에서 이미 처리하지만, 명시적으로 보장
+            if hasattr(tabs, "setCurrentWidget") and hasattr(tabs, "details_tab"):
+                tabs.setCurrentWidget(tabs.details_tab)
+            
             self.status_bar.showMessage(f"Loaded online issue {jira_key}")
+            self.logger.info(f"[DEBUG] ✅ 온라인 이슈 로드 완료: {jira_key}, 탭 전환 완료")
 
         except Exception as e:
             self.status_bar.showMessage(f"Failed to load online issue {jira_key}: {e}")
-            self.logger.error(f"Failed to load online issue {jira_key}: {e}", exc_info=True)
+            self.logger.error(f"❌ Failed to load online issue {jira_key}: {e}", exc_info=True)
             tabs.set_issue(None)
+            # 에러 발생 시에도 모듈 탭은 유지 (사용자가 다른 이슈를 선택할 수 있도록)
         finally:
             QApplication.restoreOverrideCursor()
 
