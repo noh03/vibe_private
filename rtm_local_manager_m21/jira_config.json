@@ -1,7 +1,0 @@
-{
-  "base_url": "https://your-jira-server.example.com",
-  "username": "your.jira.id@your-company.com",
-  "api_token": "YOUR_PASSWORD_OR_PAT",
-  "project_key": "KVHSICCU",
-  "project_id": 41500
-}
