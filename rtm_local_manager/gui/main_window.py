@@ -3806,8 +3806,11 @@ class MainWindow(QMainWindow):
         self.btn_import_excel.setToolTip("Import project data from Excel → Local SQLite")
         self.btn_export_excel.setIcon(style.standardIcon(QStyle.SP_DialogSaveButton))
         self.btn_export_excel.setToolTip("Export current project from Local SQLite → Excel file")
+        self.btn_bulk_create = QPushButton("대량 등록")
+        self.btn_bulk_create.setToolTip("로컬 DB의 이슈들을 온라인으로 대량 등록")
         row_local_excel.addWidget(self.btn_import_excel)
         row_local_excel.addWidget(self.btn_export_excel)
+        row_local_excel.addWidget(self.btn_bulk_create)
         gl.addLayout(row_local_excel)
 
         # Local Issues / Folders
@@ -7407,6 +7410,7 @@ class MainWindow(QMainWindow):
         # Excel Import/Export
         self.btn_import_excel.clicked.connect(self.on_import_excel_clicked)
         self.btn_export_excel.clicked.connect(self.on_export_excel_clicked)
+        self.btn_bulk_create.clicked.connect(self.on_bulk_create_clicked)
 
         # Local Issues / Folders (리본)
         self.btn_ribbon_save_issue.clicked.connect(self.on_save_issue_clicked)
@@ -7501,7 +7505,8 @@ class MainWindow(QMainWindow):
             self.right_panel.btn_refresh.clicked.connect(self.on_refresh_online_tree)
             self.right_panel.btn_sync_down.clicked.connect(self.on_full_sync_clicked)
             # JIRA create/delete (온라인 패널 헤더에 위치)
-            self.right_panel.btn_create_jira.clicked.connect(self.on_create_in_jira_clicked)
+            # 온라인 패널의 "Create in JIRA" 버튼: 새 이슈 생성 (온라인 패널 전용)
+            self.right_panel.btn_create_jira.clicked.connect(self.on_create_new_online_issue_clicked)
             self.right_panel.btn_delete_jira.clicked.connect(self.on_delete_in_jira_clicked)
             # 온라인 패널 트리 selection
             r_selection = self.right_panel.tree_view.selectionModel()
@@ -7689,12 +7694,34 @@ class MainWindow(QMainWindow):
             lbl_status.setText("Import completed successfully.")
             txt_log.append(done_msg)
             progress.setValue(100)
+            
+            # 엑셀 임포트 후 자동 등록 옵션
+            if self.jira_available and self.jira_client:
+                from backend.db import get_local_issues_without_jira_key
+                issues_without_key = get_local_issues_without_jira_key(self.conn, self.project.id)
+                
+                if issues_without_key:
+                    txt_log.append(f"\nJIRA 키가 없는 이슈 {len(issues_without_key)}개 발견.")
+                    reply = QMessageBox.question(
+                        dlg,
+                        "온라인 등록",
+                        f"엑셀에서 임포트한 이슈 중 JIRA 키가 없는 이슈가 {len(issues_without_key)}개 있습니다.\n"
+                        "온라인으로 자동 등록하시겠습니까?",
+                        QMessageBox.Yes | QMessageBox.No,
+                        QMessageBox.Yes
+                    )
+                    
+                    if reply == QMessageBox.Yes:
+                        # 대량 생성 다이얼로그 표시
+                        dlg.close()
+                        self._bulk_create_issues(issues_without_key)
+        
         except Exception as e:
             err_msg = f"Excel import failed: {e}"
             self.status_bar.showMessage(err_msg)
             txt_log.append(err_msg)
             lbl_status.setText("Import failed.")
-            print(f"[ERROR] Excel import failed: {e}")
+            self.logger.error(f"Excel import failed: {e}", exc_info=True)
         finally:
             btn_close.setEnabled(True)
             # 사용자가 진행 내역을 확인할 수 있도록 다이얼로그를 닫을 때까지 대기
@@ -8668,17 +8695,20 @@ class MainWindow(QMainWindow):
             self.status_bar.showMessage(f"Creating new {issue_type} in JIRA...")
             QApplication.setOverrideCursor(Qt.WaitCursor)
 
+            # 프로젝트 키 가져오기
+            project_key = self.project.key if self.project else None
+            
             # RTM payload 사용 (parentTestKey는 선택된 폴더에서 가져올 수 있음)
             parent_test_key = None  # TODO: 온라인 트리에서 선택된 폴더의 testKey 사용
-            payload = jira_mapping.build_rtm_payload(issue_type, issue, parent_test_key)
+            payload = jira_mapping.build_rtm_payload(issue_type, issue, parent_test_key, project_key)
             
             # RTM API로 생성
             resp = self.jira_client.create_entity(issue_type, payload)
 
             new_key = None
             if isinstance(resp, dict):
-                # 일반 Jira create 응답: {"id": "...", "key": "KVHSICCU-123", ...}
-                new_key = resp.get("key") or resp.get("jiraKey") or resp.get("issueKey")
+                # RTM 응답: {"issueKey": "KVHSICCU-123", "testKey": "KVHSICCU-123", ...}
+                new_key = resp.get("testKey") or resp.get("issueKey") or resp.get("key") or resp.get("jiraKey")
 
             if not new_key:
                 # RTM 환경에 따라 응답 구조가 다를 수 있으므로, 필요 시 로깅 후 사용자에게 알림
@@ -8693,9 +8723,219 @@ class MainWindow(QMainWindow):
 
         except Exception as e:
             self.status_bar.showMessage(f"Create in JIRA failed: {e}")
-            print(f"[ERROR] Create in JIRA failed: {e}")
+            self.logger.error(f"Create in JIRA failed: {e}", exc_info=True)
         finally:
             QApplication.restoreOverrideCursor()
+
+    def on_create_new_online_issue_clicked(self):
+        """
+        온라인 패널에서 새 JIRA 이슈를 생성한다.
+        현재 선택된 모듈 탭에 따라 이슈 타입을 결정하고, CreateIssueDialog를 표시한다.
+        """
+        if not self.jira_available or not self.jira_client:
+            self.status_bar.showMessage("Cannot create: Jira RTM not configured.")
+            return
+        
+        if not self.project or not self.project.key:
+            self.status_bar.showMessage("Project key is required. Please configure project settings.")
+            return
+        
+        # 현재 선택된 온라인 패널의 모듈 탭 인덱스 확인
+        current_tab_index = self.right_panel.module_tab_bar.currentIndex()
+        issue_type = self._issue_type_from_index(current_tab_index)
+        
+        if not issue_type:
+            self.status_bar.showMessage("Please select a module tab (Requirements, Test Cases, etc.) to create an issue.")
+            return
+        
+        # 온라인 트리에서 선택된 폴더의 testKey 가져오기
+        parent_test_key = None
+        model = self.right_panel.tree_view.model()
+        if model:
+            selection_model = self.right_panel.tree_view.selectionModel()
+            if selection_model:
+                selected_indexes = selection_model.selectedIndexes()
+                if selected_indexes:
+                    item = model.itemFromIndex(selected_indexes[0])
+                    if item:
+                        node_type = (item.data(Qt.UserRole) or "").upper()
+                        if node_type == "FOLDER":
+                            # 폴더의 testKey 가져오기
+                            parent_test_key = item.data(Qt.UserRole + 1) or None
+        
+        # CreateIssueDialog 표시
+        from rtm_local_manager.gui.create_issue_dialog import CreateIssueDialog
+        
+        dialog = CreateIssueDialog(
+            issue_type=issue_type,
+            project_key=self.project.key,
+            parent_test_key=parent_test_key,
+            jira_client=self.jira_client,
+            parent=self
+        )
+        
+        if dialog.exec() == QDialog.Accepted:
+            created_key = dialog.created_key
+            if created_key:
+                self.status_bar.showMessage(f"Created {issue_type} in JIRA as {created_key}.")
+                # 온라인 트리 새로고침
+                try:
+                    self.on_refresh_online_tree()
+                    # 생성된 이슈를 트리에서 찾아서 선택
+                    self._select_issue_in_online_tree(created_key)
+                except Exception as e:
+                    self.logger.warning(f"Failed to refresh online tree after creation: {e}")
+            else:
+                self.status_bar.showMessage("Issue created but key not returned.")
+    
+    def _select_issue_in_online_tree(self, jira_key: str):
+        """
+        온라인 트리에서 지정된 jira_key를 가진 이슈를 찾아서 선택한다.
+        """
+        model = self.right_panel.tree_view.model()
+        if not model:
+            return
+        
+        # 트리 전체를 순회하여 jira_key와 일치하는 항목 찾기
+        def find_item(parent_item, target_key):
+            for i in range(parent_item.rowCount()):
+                child = parent_item.child(i)
+                if not child:
+                    continue
+                node_key = child.data(Qt.UserRole + 1) or ""
+                if node_key == target_key:
+                    return child
+                # 재귀적으로 하위 항목 검색
+                found = find_item(child, target_key)
+                if found:
+                    return found
+            return None
+        
+        root_item = model.invisibleRootItem()
+        found_item = find_item(root_item, jira_key)
+        
+        if found_item:
+            index = model.indexFromItem(found_item)
+            if index.isValid():
+                self.right_panel.tree_view.setCurrentIndex(index)
+                # selectionChanged 시그널이 자동으로 발생하여 상세 정보가 로드됨
+    
+    def on_bulk_create_clicked(self):
+        """
+        로컬 DB의 jira_key가 없는 이슈들을 온라인으로 대량 생성합니다.
+        """
+        if not self.jira_available or not self.jira_client:
+            self.status_bar.showMessage("Cannot create: Jira RTM not configured.")
+            return
+        
+        if not self.project or not self.project.key:
+            self.status_bar.showMessage("Project key is required. Please configure project settings.")
+            return
+        
+        from backend.db import get_local_issues_without_jira_key
+        from rtm_local_manager.gui.bulk_create_dialog import BulkCreateDialog
+        
+        # jira_key가 없는 이슈 조회
+        issues_without_key = get_local_issues_without_jira_key(self.conn, self.project.id)
+        
+        if not issues_without_key:
+            QMessageBox.information(
+                self,
+                "대량 생성",
+                "온라인으로 등록할 이슈가 없습니다.\n"
+                "모든 이슈가 이미 JIRA 키를 가지고 있습니다."
+            )
+            return
+        
+        # 이슈 타입별로 그룹화하여 표시
+        issue_types = {}
+        for issue in issues_without_key:
+            issue_type = issue.get("issue_type", "UNKNOWN")
+            if issue_type not in issue_types:
+                issue_types[issue_type] = []
+            issue_types[issue_type].append(issue)
+        
+        # 확인 다이얼로그
+        type_summary = ", ".join([f"{k}: {len(v)}개" for k, v in issue_types.items()])
+        reply = QMessageBox.question(
+            self,
+            "대량 생성 확인",
+            f"다음 이슈들을 온라인으로 생성하시겠습니까?\n\n{type_summary}\n\n"
+            f"총 {len(issues_without_key)}개",
+            QMessageBox.Yes | QMessageBox.No,
+            QMessageBox.Yes
+        )
+        
+        if reply != QMessageBox.Yes:
+            return
+        
+        # 대량 생성 실행
+        self._bulk_create_issues(issues_without_key)
+    
+    def _bulk_create_issues(self, issues: List[Dict[str, Any]]):
+        """
+        이슈들을 온라인으로 대량 생성하는 내부 메서드.
+        
+        Args:
+            issues: 생성할 이슈 목록
+        """
+        from rtm_local_manager.backend.bulk_create import bulk_create_issues_in_jira
+        from rtm_local_manager.gui.bulk_create_dialog import BulkCreateDialog
+        from PySide6.QtWidgets import QApplication
+        from PySide6.QtCore import Qt
+        
+        # 대량 생성 다이얼로그 표시
+        dialog = BulkCreateDialog(len(issues), parent=self)
+        dialog.show()
+        QApplication.processEvents()
+        
+        # 진행 상황 콜백
+        def progress_cb(message: str, current: int, total: int):
+            dialog.update_progress(message, current, total)
+            QApplication.processEvents()
+        
+        try:
+            QApplication.setOverrideCursor(Qt.WaitCursor)
+            
+            # 대량 생성 실행
+            results = bulk_create_issues_in_jira(
+                self.conn,
+                issues,
+                self.jira_client,
+                self.project.key,
+                progress_cb=progress_cb
+            )
+            
+            # 결과 표시
+            dialog.set_results(results)
+            
+            # 트리 새로고침
+            self.reload_local_tree()
+            
+            # 온라인 트리도 새로고침 (생성된 이슈가 표시되도록)
+            if self.jira_available:
+                try:
+                    self.on_refresh_online_tree()
+                except Exception as e:
+                    self.logger.warning(f"Failed to refresh online tree: {e}")
+            
+            # 상태바 메시지
+            success_count = results.get("success_count", 0)
+            failure_count = results.get("failure_count", 0)
+            self.status_bar.showMessage(
+                f"대량 생성 완료: 성공 {success_count}개, 실패 {failure_count}개"
+            )
+        
+        except Exception as e:
+            self.logger.error(f"Bulk create failed: {e}", exc_info=True)
+            QMessageBox.critical(
+                self,
+                "대량 생성 실패",
+                f"대량 생성 중 오류가 발생했습니다:\n{str(e)}"
+            )
+        finally:
+            QApplication.restoreOverrideCursor()
+            # 다이얼로그는 사용자가 닫을 때까지 유지
 
     def on_save_online_issue_clicked(self):
         """

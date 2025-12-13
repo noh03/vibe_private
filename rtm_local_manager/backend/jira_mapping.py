@@ -32,13 +32,20 @@ def _safe_get(d: Dict[str, Any], *keys: str) -> Optional[Any]:
 
 
 def _join_names(items: Optional[List[Dict[str, Any]]]) -> str:
+    """
+    [{id, name}, ...] 또는 [{id}, ...] 형태의 리스트에서 name 또는 id를 추출하여 쉼표로 연결.
+    name이 있으면 name을 우선 사용하고, 없으면 id를 사용.
+    """
     if not items:
         return ""
     names = []
     for x in items:
         if not isinstance(x, dict):
             continue
+        # name이 있으면 name 사용, 없으면 id 사용
         name = x.get("name")
+        if not name:
+            name = x.get("id")
         if name:
             names.append(str(name))
     return ", ".join(names)
@@ -724,10 +731,16 @@ def map_rtm_requirement_to_local(rtm_json: Dict[str, Any]) -> Dict[str, Any]:
     """
     RTM Requirement GET 응답을 로컬 issues 형식으로 변환.
     
-    RTM 응답 구조:
-    - testKey, summary, description, assigneeId, parentTestKey
+    RTM 응답 구조 (RTM REST API.md 참조):
+    - testKey, summary, description, assigneeId, parentTestKey, projectKey
     - priority: {id, name}
     - status: {id, name, statusName}
+    - labels: [string, ...]
+    - components: [{id}, ...]
+    - versions: [{id}, ...]
+    - timeEstimate: string
+    - epicName: string
+    - issueTypeId: int
     - testCasesCovered: [{testKey, issueId}, ...]
     """
     updates: Dict[str, Any] = {}
@@ -741,6 +754,10 @@ def map_rtm_requirement_to_local(rtm_json: Dict[str, Any]) -> Dict[str, Any]:
         updates["description"] = rtm_json["description"] or ""
     if "assigneeId" in rtm_json:
         updates["assignee"] = rtm_json["assigneeId"] or ""
+    if "projectKey" in rtm_json:
+        updates["_rtm_projectKey"] = rtm_json["projectKey"] or ""
+    if "parentTestKey" in rtm_json:
+        updates["_rtm_parentTestKey"] = rtm_json["parentTestKey"] or ""
     
     # priority
     if "priority" in rtm_json and isinstance(rtm_json["priority"], dict):
@@ -749,6 +766,31 @@ def map_rtm_requirement_to_local(rtm_json: Dict[str, Any]) -> Dict[str, Any]:
     # status
     if "status" in rtm_json and isinstance(rtm_json["status"], dict):
         updates["status"] = rtm_json["status"].get("name") or rtm_json["status"].get("statusName") or ""
+    
+    # labels
+    if "labels" in rtm_json and isinstance(rtm_json["labels"], list):
+        updates["labels"] = _join_strings(rtm_json["labels"])
+    
+    # components
+    if "components" in rtm_json and isinstance(rtm_json["components"], list):
+        # components는 [{id}, ...] 또는 [{id, name}, ...] 형태
+        updates["components"] = _join_names(rtm_json["components"])
+    
+    # versions (fixVersions/affectsVersions로 사용 가능)
+    if "versions" in rtm_json and isinstance(rtm_json["versions"], list):
+        updates["fix_versions"] = _join_names(rtm_json["versions"])
+    
+    # timeEstimate
+    if "timeEstimate" in rtm_json:
+        updates["_rtm_timeEstimate"] = rtm_json["timeEstimate"] or ""
+    
+    # epicName
+    if "epicName" in rtm_json:
+        updates["epic_link"] = rtm_json["epicName"] or ""
+    
+    # issueTypeId
+    if "issueTypeId" in rtm_json:
+        updates["_rtm_issueTypeId"] = rtm_json["issueTypeId"]
     
     # testCasesCovered는 별도로 처리 (Requirements 탭에서 사용)
     updates["_rtm_testCasesCovered"] = rtm_json.get("testCasesCovered") or []
@@ -760,74 +802,18 @@ def map_rtm_testcase_to_local(rtm_json: Dict[str, Any]) -> Dict[str, Any]:
     """
     RTM Test Case GET 응답을 로컬 issues 형식으로 변환.
     
-    RTM 응답 구조:
-    - testKey, summary, description, parentTestKey
+    RTM 응답 구조 (RTM REST API.md 참조):
+    - testKey, summary, description, assigneeId, parentTestKey, projectKey
     - priority: {id, name}
     - status: {id, name, statusName}
-    - components: [{id, name}, ...]
+    - labels: [string, ...]
+    - components: [{id}, ...]
+    - versions: [{id}, ...]
+    - timeEstimate: string
+    - environment: string
     - preconditions: string
     - steps: [[{value: string}], ...] (2차원 배열)
-    """
-    updates: Dict[str, Any] = {}
-    
-    # 기본 필드
-    if "testKey" in rtm_json:
-        updates["jira_key"] = rtm_json["testKey"]
-    if "summary" in rtm_json:
-        updates["summary"] = rtm_json["summary"] or ""
-    if "description" in rtm_json:
-        updates["description"] = rtm_json["description"] or ""
-    
-    # priority
-    if "priority" in rtm_json and isinstance(rtm_json["priority"], dict):
-        updates["priority"] = rtm_json["priority"].get("name") or ""
-    
-    # status
-    if "status" in rtm_json and isinstance(rtm_json["status"], dict):
-        updates["status"] = rtm_json["status"].get("name") or rtm_json["status"].get("statusName") or ""
-    
-    # components
-    if "components" in rtm_json and isinstance(rtm_json["components"], list):
-        updates["components"] = _join_names(rtm_json["components"])
-    
-    # preconditions
-    if "preconditions" in rtm_json:
-        updates["_rtm_preconditions"] = rtm_json["preconditions"] or ""
-    
-    # steps는 별도로 처리 (Steps 탭에서 사용)
-    # RTM steps는 2차원 배열: [[{value: "..."}], [{value: "..."}], ...]
-    # 로컬 steps 형식으로 변환: [{order_no, action, input, expected}]
-    steps_raw = rtm_json.get("steps") or []
-    steps_local: List[Dict[str, Any]] = []
-    if isinstance(steps_raw, list):
-        for step_group_idx, step_group in enumerate(steps_raw, start=1):
-            if isinstance(step_group, list):
-                for step_idx, step_item in enumerate(step_group, start=1):
-                    if isinstance(step_item, dict):
-                        value = step_item.get("value") or ""
-                        # HTML 태그 제거 (간단한 처리)
-                        import re
-                        value = re.sub(r'<[^>]+>', '', value).strip()
-                        steps_local.append({
-                            "order_no": len(steps_local) + 1,
-                            "action": value,
-                            "input": "",
-                            "expected": "",
-                        })
-    updates["_rtm_steps"] = steps_local
-    
-    return updates
-
-
-def map_rtm_testplan_to_local(rtm_json: Dict[str, Any]) -> Dict[str, Any]:
-    """
-    RTM Test Plan GET 응답을 로컬 issues 형식으로 변환.
-    
-    RTM 응답 구조:
-    - testKey, summary, description, assigneeId, parentTestKey
-    - priority: {id, name}
-    - status: {id, name, statusName}
-    - includedTestCases: [{testKey}, ...]
+    - coveredRequirements: [{testKey, issueId}, ...]
     """
     updates: Dict[str, Any] = {}
     
@@ -840,6 +826,10 @@ def map_rtm_testplan_to_local(rtm_json: Dict[str, Any]) -> Dict[str, Any]:
         updates["description"] = rtm_json["description"] or ""
     if "assigneeId" in rtm_json:
         updates["assignee"] = rtm_json["assigneeId"] or ""
+    if "projectKey" in rtm_json:
+        updates["_rtm_projectKey"] = rtm_json["projectKey"] or ""
+    if "parentTestKey" in rtm_json:
+        updates["_rtm_parentTestKey"] = rtm_json["parentTestKey"] or ""
     
     # priority
     if "priority" in rtm_json and isinstance(rtm_json["priority"], dict):
@@ -848,6 +838,156 @@ def map_rtm_testplan_to_local(rtm_json: Dict[str, Any]) -> Dict[str, Any]:
     # status
     if "status" in rtm_json and isinstance(rtm_json["status"], dict):
         updates["status"] = rtm_json["status"].get("name") or rtm_json["status"].get("statusName") or ""
+    
+    # labels
+    if "labels" in rtm_json and isinstance(rtm_json["labels"], list):
+        updates["labels"] = _join_strings(rtm_json["labels"])
+    
+    # components
+    if "components" in rtm_json and isinstance(rtm_json["components"], list):
+        updates["components"] = _join_names(rtm_json["components"])
+    
+    # versions
+    if "versions" in rtm_json and isinstance(rtm_json["versions"], list):
+        updates["fix_versions"] = _join_names(rtm_json["versions"])
+    
+    # timeEstimate
+    if "timeEstimate" in rtm_json:
+        updates["_rtm_timeEstimate"] = rtm_json["timeEstimate"] or ""
+    
+    # environment
+    if "environment" in rtm_json:
+        updates["rtm_environment"] = rtm_json["environment"] or ""
+    
+    # preconditions
+    if "preconditions" in rtm_json:
+        updates["_rtm_preconditions"] = rtm_json["preconditions"] or ""
+    
+    # steps는 별도로 처리 (Steps 탭에서 사용)
+    # RTM steps는 stepGroups 구조 또는 2차원 배열 형태일 수 있음
+    steps_raw = rtm_json.get("steps") or []
+    # stepGroups가 있으면 그것을 사용
+    if "stepGroups" in rtm_json and isinstance(rtm_json["stepGroups"], list):
+        steps_raw = []
+        for group in rtm_json["stepGroups"]:
+            if isinstance(group, dict) and "steps" in group:
+                steps_raw.extend(group["steps"])
+    
+    steps_local: List[Dict[str, Any]] = []
+    if isinstance(steps_raw, list):
+        for step_group_idx, step_group in enumerate(steps_raw, start=1):
+            if isinstance(step_group, list):
+                # 2차원 배열 형태: [[{value: "..."}], ...]
+                for step_item in step_group:
+                    if isinstance(step_item, dict):
+                        value = step_item.get("value") or ""
+                        # HTML 태그 제거
+                        import re
+                        value = re.sub(r'<[^>]+>', '', value).strip()
+                        steps_local.append({
+                            "order_no": len(steps_local) + 1,
+                            "action": value,
+                            "input": "",
+                            "expected": "",
+                        })
+            elif isinstance(step_group, dict):
+                # 단일 step 객체 형태
+                step_columns = step_group.get("stepColumns") or []
+                if step_columns:
+                    # stepColumns에서 value 추출
+                    action = ""
+                    expected = ""
+                    for col in step_columns:
+                        if isinstance(col, dict):
+                            col_name = col.get("name", "").lower()
+                            col_value = col.get("value") or ""
+                            if "action" in col_name:
+                                action = col_value
+                            elif "expected" in col_name or "result" in col_name:
+                                expected = col_value
+                    if action:
+                        import re
+                        action = re.sub(r'<[^>]+>', '', action).strip()
+                        expected = re.sub(r'<[^>]+>', '', expected).strip()
+                        steps_local.append({
+                            "order_no": len(steps_local) + 1,
+                            "action": action,
+                            "input": "",
+                            "expected": expected,
+                        })
+    
+    updates["_rtm_steps"] = steps_local
+    
+    # coveredRequirements
+    if "coveredRequirements" in rtm_json:
+        updates["_rtm_coveredRequirements"] = rtm_json.get("coveredRequirements") or []
+    
+    return updates
+
+
+def map_rtm_testplan_to_local(rtm_json: Dict[str, Any]) -> Dict[str, Any]:
+    """
+    RTM Test Plan GET 응답을 로컬 issues 형식으로 변환.
+    
+    RTM 응답 구조 (RTM REST API.md 참조):
+    - testKey, summary, description, assigneeId, parentTestKey, projectKey
+    - priority: {id, name}
+    - status: {id, name, statusName}
+    - labels: [string, ...]
+    - components: [{id}, ...]
+    - versions: [{id}, ...]
+    - timeEstimate: string
+    - environment: string
+    - executions: [{testKey, issueId}, ...]
+    - includedTestCases: [{testKey, issueId}, ...]
+    """
+    updates: Dict[str, Any] = {}
+    
+    # 기본 필드
+    if "testKey" in rtm_json:
+        updates["jira_key"] = rtm_json["testKey"]
+    if "summary" in rtm_json:
+        updates["summary"] = rtm_json["summary"] or ""
+    if "description" in rtm_json:
+        updates["description"] = rtm_json["description"] or ""
+    if "assigneeId" in rtm_json:
+        updates["assignee"] = rtm_json["assigneeId"] or ""
+    if "projectKey" in rtm_json:
+        updates["_rtm_projectKey"] = rtm_json["projectKey"] or ""
+    if "parentTestKey" in rtm_json:
+        updates["_rtm_parentTestKey"] = rtm_json["parentTestKey"] or ""
+    
+    # priority
+    if "priority" in rtm_json and isinstance(rtm_json["priority"], dict):
+        updates["priority"] = rtm_json["priority"].get("name") or ""
+    
+    # status
+    if "status" in rtm_json and isinstance(rtm_json["status"], dict):
+        updates["status"] = rtm_json["status"].get("name") or rtm_json["status"].get("statusName") or ""
+    
+    # labels
+    if "labels" in rtm_json and isinstance(rtm_json["labels"], list):
+        updates["labels"] = _join_strings(rtm_json["labels"])
+    
+    # components
+    if "components" in rtm_json and isinstance(rtm_json["components"], list):
+        updates["components"] = _join_names(rtm_json["components"])
+    
+    # versions
+    if "versions" in rtm_json and isinstance(rtm_json["versions"], list):
+        updates["fix_versions"] = _join_names(rtm_json["versions"])
+    
+    # timeEstimate
+    if "timeEstimate" in rtm_json:
+        updates["_rtm_timeEstimate"] = rtm_json["timeEstimate"] or ""
+    
+    # environment
+    if "environment" in rtm_json:
+        updates["rtm_environment"] = rtm_json["environment"] or ""
+    
+    # executions
+    if "executions" in rtm_json:
+        updates["_rtm_executions"] = rtm_json.get("executions") or []
     
     # includedTestCases는 별도로 처리 (Test Cases 탭에서 사용)
     updates["_rtm_includedTestCases"] = rtm_json.get("includedTestCases") or []
@@ -859,13 +999,16 @@ def map_rtm_testexecution_to_local(rtm_json: Dict[str, Any]) -> Dict[str, Any]:
     """
     RTM Test Execution GET 응답을 로컬 issues 형식으로 변환.
     
-    RTM 응답 구조:
-    - testKey, summary, assigneeId, parentTestKey
+    RTM 응답 구조 (RTM REST API.md 참조):
+    - testKey, summary, description, assigneeId, parentTestKey
     - priority: {id, name}
-    - status: {id, name, statusName}
-    - result: {id, name, statusName, finalStatus}
-    - timeEstimate: int
-    - testPlan: {testKey, issueId}
+    - labels: [string, ...]
+    - components: [{id}, ...]
+    - versions: [{id}, ...]
+    - timeEstimate: string
+    - environment: string
+    - result: {id, name, statusName, statusId, finalStatus}
+    - executeTransition: {id, name}
     - testCaseExecutions: [{testKey, summary, result, priority, ...}, ...]
     """
     updates: Dict[str, Any] = {}
@@ -875,24 +1018,44 @@ def map_rtm_testexecution_to_local(rtm_json: Dict[str, Any]) -> Dict[str, Any]:
         updates["jira_key"] = rtm_json["testKey"]
     if "summary" in rtm_json:
         updates["summary"] = rtm_json["summary"] or ""
+    if "description" in rtm_json:
+        updates["description"] = rtm_json["description"] or ""
     if "assigneeId" in rtm_json:
         updates["assignee"] = rtm_json["assigneeId"] or ""
+    if "parentTestKey" in rtm_json:
+        updates["_rtm_parentTestKey"] = rtm_json["parentTestKey"] or ""
     
     # priority
     if "priority" in rtm_json and isinstance(rtm_json["priority"], dict):
         updates["priority"] = rtm_json["priority"].get("name") or ""
     
-    # status
-    if "status" in rtm_json and isinstance(rtm_json["status"], dict):
-        updates["status"] = rtm_json["status"].get("name") or rtm_json["status"].get("statusName") or ""
+    # labels
+    if "labels" in rtm_json and isinstance(rtm_json["labels"], list):
+        updates["labels"] = _join_strings(rtm_json["labels"])
+    
+    # components
+    if "components" in rtm_json and isinstance(rtm_json["components"], list):
+        updates["components"] = _join_names(rtm_json["components"])
+    
+    # versions
+    if "versions" in rtm_json and isinstance(rtm_json["versions"], list):
+        updates["fix_versions"] = _join_names(rtm_json["versions"])
+    
+    # timeEstimate
+    if "timeEstimate" in rtm_json:
+        updates["_rtm_timeEstimate"] = rtm_json["timeEstimate"] or ""
+    
+    # environment
+    if "environment" in rtm_json:
+        updates["rtm_environment"] = rtm_json["environment"] or ""
     
     # result
     if "result" in rtm_json and isinstance(rtm_json["result"], dict):
         updates["_rtm_result"] = rtm_json["result"]
     
-    # testPlan
-    if "testPlan" in rtm_json:
-        updates["_rtm_testPlan"] = rtm_json["testPlan"]
+    # executeTransition
+    if "executeTransition" in rtm_json:
+        updates["_rtm_executeTransition"] = rtm_json["executeTransition"]
     
     # testCaseExecutions는 별도로 처리 (Executions 탭에서 사용)
     updates["_rtm_testCaseExecutions"] = rtm_json.get("testCaseExecutions") or []
@@ -904,10 +1067,17 @@ def map_rtm_defect_to_local(rtm_json: Dict[str, Any]) -> Dict[str, Any]:
     """
     RTM Defect GET 응답을 로컬 issues 형식으로 변환.
     
-    RTM 응답 구조:
-    - testKey, summary, description, assigneeId, parentTestKey
+    RTM 응답 구조 (RTM REST API.md 참조):
+    - testKey, summary, description, assigneeId, parentTestKey, projectKey
+    - issueTypeId: int
     - priority: {id, name}
     - status: {id, name, statusName}
+    - labels: [string, ...]
+    - components: [{id}, ...]
+    - versions: [{id}, ...]
+    - timeEstimate: string
+    - environment: string
+    - detectingExecutions: [{testKey, issueId}, ...]
     - identifyingTestCases: [{testKey, issueId}, ...]
     """
     updates: Dict[str, Any] = {}
@@ -921,6 +1091,14 @@ def map_rtm_defect_to_local(rtm_json: Dict[str, Any]) -> Dict[str, Any]:
         updates["description"] = rtm_json["description"] or ""
     if "assigneeId" in rtm_json:
         updates["assignee"] = rtm_json["assigneeId"] or ""
+    if "projectKey" in rtm_json:
+        updates["_rtm_projectKey"] = rtm_json["projectKey"] or ""
+    if "parentTestKey" in rtm_json:
+        updates["_rtm_parentTestKey"] = rtm_json["parentTestKey"] or ""
+    
+    # issueTypeId
+    if "issueTypeId" in rtm_json:
+        updates["_rtm_issueTypeId"] = rtm_json["issueTypeId"]
     
     # priority
     if "priority" in rtm_json and isinstance(rtm_json["priority"], dict):
@@ -929,6 +1107,30 @@ def map_rtm_defect_to_local(rtm_json: Dict[str, Any]) -> Dict[str, Any]:
     # status
     if "status" in rtm_json and isinstance(rtm_json["status"], dict):
         updates["status"] = rtm_json["status"].get("name") or rtm_json["status"].get("statusName") or ""
+    
+    # labels
+    if "labels" in rtm_json and isinstance(rtm_json["labels"], list):
+        updates["labels"] = _join_strings(rtm_json["labels"])
+    
+    # components
+    if "components" in rtm_json and isinstance(rtm_json["components"], list):
+        updates["components"] = _join_names(rtm_json["components"])
+    
+    # versions
+    if "versions" in rtm_json and isinstance(rtm_json["versions"], list):
+        updates["fix_versions"] = _join_names(rtm_json["versions"])
+    
+    # timeEstimate
+    if "timeEstimate" in rtm_json:
+        updates["_rtm_timeEstimate"] = rtm_json["timeEstimate"] or ""
+    
+    # environment
+    if "environment" in rtm_json:
+        updates["rtm_environment"] = rtm_json["environment"] or ""
+    
+    # detectingExecutions
+    if "detectingExecutions" in rtm_json:
+        updates["_rtm_detectingExecutions"] = rtm_json.get("detectingExecutions") or []
     
     # identifyingTestCases는 별도로 처리 (Test Cases 탭에서 사용)
     updates["_rtm_identifyingTestCases"] = rtm_json.get("identifyingTestCases") or []
@@ -964,11 +1166,28 @@ def map_rtm_to_local(issue_type: str, rtm_json: Dict[str, Any]) -> Dict[str, Any
 # 로컬 issues 형식 또는 GUI에서 수집한 데이터를 RTM API payload로 변환합니다.
 
 
-def build_rtm_requirement_payload(local_issue: Dict[str, Any], parent_test_key: Optional[str] = None) -> Dict[str, Any]:
+def build_rtm_requirement_payload(local_issue: Dict[str, Any], parent_test_key: Optional[str] = None, project_key: Optional[str] = None) -> Dict[str, Any]:
     """
     로컬 이슈 데이터를 RTM Requirement 생성/수정 payload로 변환.
+    
+    Args:
+        local_issue: 로컬 이슈 데이터
+        parent_test_key: 부모 폴더/이슈 키 (선택적)
+        project_key: 프로젝트 키 (생성 시 필수)
     """
     payload: Dict[str, Any] = {}
+    
+    # projectKey (생성 시 필수)
+    if project_key:
+        payload["projectKey"] = project_key
+    elif "_rtm_projectKey" in local_issue:
+        payload["projectKey"] = local_issue["_rtm_projectKey"]
+    
+    # issueTypeId (선택적, RTM에서 자동 설정될 수 있음)
+    if "issueTypeId" in local_issue:
+        payload["issueTypeId"] = local_issue["issueTypeId"]
+    elif "_rtm_issueTypeId" in local_issue:
+        payload["issueTypeId"] = local_issue["_rtm_issueTypeId"]
     
     if "summary" in local_issue:
         payload["summary"] = local_issue["summary"] or ""
@@ -982,11 +1201,11 @@ def build_rtm_requirement_payload(local_issue: Dict[str, Any], parent_test_key: 
     
     if parent_test_key:
         payload["parentTestKey"] = parent_test_key
+    elif "_rtm_parentTestKey" in local_issue:
+        payload["parentTestKey"] = local_issue["_rtm_parentTestKey"]
     
     # priority, status는 RTM에서 객체 형태로 요구할 수 있음
-    # 실제 환경에 맞게 조정 필요
     if "priority" in local_issue and local_issue["priority"]:
-        # 문자열인 경우 {name: "..."} 형태로 변환
         if isinstance(local_issue["priority"], str):
             payload["priority"] = {"name": local_issue["priority"]}
         else:
@@ -998,6 +1217,41 @@ def build_rtm_requirement_payload(local_issue: Dict[str, Any], parent_test_key: 
         else:
             payload["status"] = local_issue["status"]
     
+    # labels
+    if "labels" in local_issue and local_issue["labels"]:
+        if isinstance(local_issue["labels"], str):
+            labels = [x.strip() for x in local_issue["labels"].split(",") if x.strip()]
+            if labels:
+                payload["labels"] = labels
+        elif isinstance(local_issue["labels"], list):
+            payload["labels"] = local_issue["labels"]
+    
+    # components
+    if "components" in local_issue and local_issue["components"]:
+        if isinstance(local_issue["components"], str):
+            comp_names = [x.strip() for x in local_issue["components"].split(",") if x.strip()]
+            payload["components"] = [{"name": name} for name in comp_names]
+        elif isinstance(local_issue["components"], list):
+            payload["components"] = local_issue["components"]
+    
+    # versions
+    if "fix_versions" in local_issue and local_issue["fix_versions"]:
+        if isinstance(local_issue["fix_versions"], str):
+            ver_names = [x.strip() for x in local_issue["fix_versions"].split(",") if x.strip()]
+            payload["versions"] = [{"id": name} for name in ver_names]
+        elif isinstance(local_issue["fix_versions"], list):
+            payload["versions"] = local_issue["fix_versions"]
+    
+    # timeEstimate
+    if "timeEstimate" in local_issue:
+        payload["timeEstimate"] = local_issue["timeEstimate"]
+    elif "_rtm_timeEstimate" in local_issue:
+        payload["timeEstimate"] = local_issue["_rtm_timeEstimate"]
+    
+    # epicName
+    if "epic_link" in local_issue and local_issue["epic_link"]:
+        payload["epicName"] = local_issue["epic_link"]
+    
     # testCasesCovered는 별도 API로 관리될 수 있음
     if "_rtm_testCasesCovered" in local_issue:
         payload["testCasesCovered"] = local_issue["_rtm_testCasesCovered"]
@@ -1005,11 +1259,22 @@ def build_rtm_requirement_payload(local_issue: Dict[str, Any], parent_test_key: 
     return payload
 
 
-def build_rtm_testcase_payload(local_issue: Dict[str, Any], parent_test_key: Optional[str] = None) -> Dict[str, Any]:
+def build_rtm_testcase_payload(local_issue: Dict[str, Any], parent_test_key: Optional[str] = None, project_key: Optional[str] = None) -> Dict[str, Any]:
     """
     로컬 이슈 데이터를 RTM Test Case 생성/수정 payload로 변환.
+    
+    Args:
+        local_issue: 로컬 이슈 데이터
+        parent_test_key: 부모 폴더/이슈 키 (선택적)
+        project_key: 프로젝트 키 (생성 시 필수)
     """
     payload: Dict[str, Any] = {}
+    
+    # projectKey (생성 시 필수)
+    if project_key:
+        payload["projectKey"] = project_key
+    elif "_rtm_projectKey" in local_issue:
+        payload["projectKey"] = local_issue["_rtm_projectKey"]
     
     if "summary" in local_issue:
         payload["summary"] = local_issue["summary"] or ""
@@ -1018,6 +1283,8 @@ def build_rtm_testcase_payload(local_issue: Dict[str, Any], parent_test_key: Opt
     
     if parent_test_key:
         payload["parentTestKey"] = parent_test_key
+    elif "_rtm_parentTestKey" in local_issue:
+        payload["parentTestKey"] = local_issue["_rtm_parentTestKey"]
     
     if "priority" in local_issue and local_issue["priority"]:
         if isinstance(local_issue["priority"], str):
@@ -1034,11 +1301,30 @@ def build_rtm_testcase_payload(local_issue: Dict[str, Any], parent_test_key: Opt
     # components
     if "components" in local_issue and local_issue["components"]:
         if isinstance(local_issue["components"], str):
-            # "Component1, Component2" -> [{"name": "Component1"}, {"name": "Component2"}]
             comp_names = [x.strip() for x in local_issue["components"].split(",") if x.strip()]
             payload["components"] = [{"name": name} for name in comp_names]
         elif isinstance(local_issue["components"], list):
             payload["components"] = local_issue["components"]
+    
+    # versions
+    if "fix_versions" in local_issue and local_issue["fix_versions"]:
+        if isinstance(local_issue["fix_versions"], str):
+            ver_names = [x.strip() for x in local_issue["fix_versions"].split(",") if x.strip()]
+            payload["versions"] = [{"id": name} for name in ver_names]
+        elif isinstance(local_issue["fix_versions"], list):
+            payload["versions"] = local_issue["fix_versions"]
+    
+    # timeEstimate
+    if "timeEstimate" in local_issue:
+        payload["timeEstimate"] = local_issue["timeEstimate"]
+    elif "_rtm_timeEstimate" in local_issue:
+        payload["timeEstimate"] = local_issue["_rtm_timeEstimate"]
+    
+    # environment
+    if "rtm_environment" in local_issue and local_issue["rtm_environment"]:
+        payload["environment"] = local_issue["rtm_environment"]
+    elif "environment" in local_issue:
+        payload["environment"] = local_issue["environment"]
     
     # preconditions
     if "_rtm_preconditions" in local_issue:
@@ -1048,24 +1334,37 @@ def build_rtm_testcase_payload(local_issue: Dict[str, Any], parent_test_key: Opt
     
     # steps는 별도 API로 관리될 수 있음
     if "_rtm_steps" in local_issue:
-        # 로컬 steps 형식 [{order_no, action, input, expected}] -> RTM 형식 [[{value: "..."}], ...]
         steps_rtm = []
         for step in local_issue["_rtm_steps"]:
             if isinstance(step, dict):
                 action = step.get("action") or ""
-                # HTML 태그 추가 (필요한 경우)
                 value = f"<p>{action}</p>" if action else "<p>-</p>"
                 steps_rtm.append([{"value": value}])
         payload["steps"] = steps_rtm
     
+    # coveredRequirements
+    if "_rtm_coveredRequirements" in local_issue:
+        payload["coveredRequirements"] = local_issue["_rtm_coveredRequirements"]
+    
     return payload
 
 
-def build_rtm_testplan_payload(local_issue: Dict[str, Any], parent_test_key: Optional[str] = None) -> Dict[str, Any]:
+def build_rtm_testplan_payload(local_issue: Dict[str, Any], parent_test_key: Optional[str] = None, project_key: Optional[str] = None) -> Dict[str, Any]:
     """
     로컬 이슈 데이터를 RTM Test Plan 생성/수정 payload로 변환.
+    
+    Args:
+        local_issue: 로컬 이슈 데이터
+        parent_test_key: 부모 폴더/이슈 키 (선택적)
+        project_key: 프로젝트 키 (생성 시 필수)
     """
     payload: Dict[str, Any] = {}
+    
+    # projectKey (생성 시 필수)
+    if project_key:
+        payload["projectKey"] = project_key
+    elif "_rtm_projectKey" in local_issue:
+        payload["projectKey"] = local_issue["_rtm_projectKey"]
     
     if "summary" in local_issue:
         payload["summary"] = local_issue["summary"] or ""
@@ -1078,6 +1377,8 @@ def build_rtm_testplan_payload(local_issue: Dict[str, Any], parent_test_key: Opt
     
     if parent_test_key:
         payload["parentTestKey"] = parent_test_key
+    elif "_rtm_parentTestKey" in local_issue:
+        payload["parentTestKey"] = local_issue["_rtm_parentTestKey"]
     
     if "priority" in local_issue and local_issue["priority"]:
         if isinstance(local_issue["priority"], str):
@@ -1090,6 +1391,43 @@ def build_rtm_testplan_payload(local_issue: Dict[str, Any], parent_test_key: Opt
             payload["status"] = {"name": local_issue["status"]}
         else:
             payload["status"] = local_issue["status"]
+    
+    # labels, components, versions, timeEstimate, environment
+    if "labels" in local_issue and local_issue["labels"]:
+        if isinstance(local_issue["labels"], str):
+            labels = [x.strip() for x in local_issue["labels"].split(",") if x.strip()]
+            if labels:
+                payload["labels"] = labels
+        elif isinstance(local_issue["labels"], list):
+            payload["labels"] = local_issue["labels"]
+    
+    if "components" in local_issue and local_issue["components"]:
+        if isinstance(local_issue["components"], str):
+            comp_names = [x.strip() for x in local_issue["components"].split(",") if x.strip()]
+            payload["components"] = [{"name": name} for name in comp_names]
+        elif isinstance(local_issue["components"], list):
+            payload["components"] = local_issue["components"]
+    
+    if "fix_versions" in local_issue and local_issue["fix_versions"]:
+        if isinstance(local_issue["fix_versions"], str):
+            ver_names = [x.strip() for x in local_issue["fix_versions"].split(",") if x.strip()]
+            payload["versions"] = [{"id": name} for name in ver_names]
+        elif isinstance(local_issue["fix_versions"], list):
+            payload["versions"] = local_issue["fix_versions"]
+    
+    if "timeEstimate" in local_issue:
+        payload["timeEstimate"] = local_issue["timeEstimate"]
+    elif "_rtm_timeEstimate" in local_issue:
+        payload["timeEstimate"] = local_issue["_rtm_timeEstimate"]
+    
+    if "rtm_environment" in local_issue and local_issue["rtm_environment"]:
+        payload["environment"] = local_issue["rtm_environment"]
+    elif "environment" in local_issue:
+        payload["environment"] = local_issue["environment"]
+    
+    # executions
+    if "_rtm_executions" in local_issue:
+        payload["executions"] = local_issue["_rtm_executions"]
     
     # includedTestCases는 별도 API로 관리될 수 있음
     if "_rtm_includedTestCases" in local_issue:
@@ -1098,58 +1436,22 @@ def build_rtm_testplan_payload(local_issue: Dict[str, Any], parent_test_key: Opt
     return payload
 
 
-def build_rtm_testexecution_payload(local_issue: Dict[str, Any], parent_test_key: Optional[str] = None) -> Dict[str, Any]:
+def build_rtm_testexecution_payload(local_issue: Dict[str, Any], parent_test_key: Optional[str] = None, project_key: Optional[str] = None) -> Dict[str, Any]:
     """
     로컬 이슈 데이터를 RTM Test Execution 생성/수정 payload로 변환.
+    
+    Args:
+        local_issue: 로컬 이슈 데이터
+        parent_test_key: 부모 폴더/이슈 키 (선택적)
+        project_key: 프로젝트 키 (생성 시 필수, Test Plan 기반 생성 시에는 불필요)
     """
     payload: Dict[str, Any] = {}
     
-    if "summary" in local_issue:
-        payload["summary"] = local_issue["summary"] or ""
-    if "assigneeId" in local_issue:
-        payload["assigneeId"] = local_issue["assigneeId"]
-    elif "assignee" in local_issue and local_issue["assignee"]:
-        payload["assigneeId"] = local_issue["assignee"]
-    
-    if parent_test_key:
-        payload["parentTestKey"] = parent_test_key
-    
-    if "priority" in local_issue and local_issue["priority"]:
-        if isinstance(local_issue["priority"], str):
-            payload["priority"] = {"name": local_issue["priority"]}
-        else:
-            payload["priority"] = local_issue["priority"]
-    
-    if "status" in local_issue and local_issue["status"]:
-        if isinstance(local_issue["status"], str):
-            payload["status"] = {"name": local_issue["status"]}
-        else:
-            payload["status"] = local_issue["status"]
-    
-    # result
-    if "_rtm_result" in local_issue:
-        payload["result"] = local_issue["_rtm_result"]
-    
-    # testPlan
-    if "_rtm_testPlan" in local_issue:
-        payload["testPlan"] = local_issue["_rtm_testPlan"]
-    
-    # timeEstimate
-    if "timeEstimate" in local_issue:
-        payload["timeEstimate"] = local_issue["timeEstimate"]
-    
-    # testCaseExecutions는 별도 API로 관리될 수 있음
-    if "_rtm_testCaseExecutions" in local_issue:
-        payload["testCaseExecutions"] = local_issue["_rtm_testCaseExecutions"]
-    
-    return payload
-
-
-def build_rtm_defect_payload(local_issue: Dict[str, Any], parent_test_key: Optional[str] = None) -> Dict[str, Any]:
-    """
-    로컬 이슈 데이터를 RTM Defect 생성/수정 payload로 변환.
-    """
-    payload: Dict[str, Any] = {}
+    # projectKey는 Test Plan 기반 생성 시에는 불필요
+    if project_key:
+        payload["projectKey"] = project_key
+    elif "_rtm_projectKey" in local_issue:
+        payload["projectKey"] = local_issue["_rtm_projectKey"]
     
     if "summary" in local_issue:
         payload["summary"] = local_issue["summary"] or ""
@@ -1162,6 +1464,8 @@ def build_rtm_defect_payload(local_issue: Dict[str, Any], parent_test_key: Optio
     
     if parent_test_key:
         payload["parentTestKey"] = parent_test_key
+    elif "_rtm_parentTestKey" in local_issue:
+        payload["parentTestKey"] = local_issue["_rtm_parentTestKey"]
     
     if "priority" in local_issue and local_issue["priority"]:
         if isinstance(local_issue["priority"], str):
@@ -1175,6 +1479,144 @@ def build_rtm_defect_payload(local_issue: Dict[str, Any], parent_test_key: Optio
         else:
             payload["status"] = local_issue["status"]
     
+    # labels, components, versions, timeEstimate, environment
+    if "labels" in local_issue and local_issue["labels"]:
+        if isinstance(local_issue["labels"], str):
+            labels = [x.strip() for x in local_issue["labels"].split(",") if x.strip()]
+            if labels:
+                payload["labels"] = labels
+        elif isinstance(local_issue["labels"], list):
+            payload["labels"] = local_issue["labels"]
+    
+    if "components" in local_issue and local_issue["components"]:
+        if isinstance(local_issue["components"], str):
+            comp_names = [x.strip() for x in local_issue["components"].split(",") if x.strip()]
+            payload["components"] = [{"name": name} for name in comp_names]
+        elif isinstance(local_issue["components"], list):
+            payload["components"] = local_issue["components"]
+    
+    if "fix_versions" in local_issue and local_issue["fix_versions"]:
+        if isinstance(local_issue["fix_versions"], str):
+            ver_names = [x.strip() for x in local_issue["fix_versions"].split(",") if x.strip()]
+            payload["versions"] = [{"id": name} for name in ver_names]
+        elif isinstance(local_issue["fix_versions"], list):
+            payload["versions"] = local_issue["fix_versions"]
+    
+    if "timeEstimate" in local_issue:
+        payload["timeEstimate"] = local_issue["timeEstimate"]
+    elif "_rtm_timeEstimate" in local_issue:
+        payload["timeEstimate"] = local_issue["_rtm_timeEstimate"]
+    
+    if "rtm_environment" in local_issue and local_issue["rtm_environment"]:
+        payload["environment"] = local_issue["rtm_environment"]
+    elif "environment" in local_issue:
+        payload["environment"] = local_issue["environment"]
+    
+    # result
+    if "_rtm_result" in local_issue:
+        payload["result"] = local_issue["_rtm_result"]
+    
+    # executeTransition
+    if "_rtm_executeTransition" in local_issue:
+        payload["executeTransition"] = local_issue["_rtm_executeTransition"]
+    
+    # testPlan
+    if "_rtm_testPlan" in local_issue:
+        payload["testPlan"] = local_issue["_rtm_testPlan"]
+    
+    # testCaseExecutions는 별도 API로 관리될 수 있음
+    if "_rtm_testCaseExecutions" in local_issue:
+        payload["testCaseExecutions"] = local_issue["_rtm_testCaseExecutions"]
+    
+    return payload
+
+
+def build_rtm_defect_payload(local_issue: Dict[str, Any], parent_test_key: Optional[str] = None, project_key: Optional[str] = None) -> Dict[str, Any]:
+    """
+    로컬 이슈 데이터를 RTM Defect 생성/수정 payload로 변환.
+    
+    Args:
+        local_issue: 로컬 이슈 데이터
+        parent_test_key: 부모 폴더/이슈 키 (선택적)
+        project_key: 프로젝트 키 (생성 시 필수)
+    """
+    payload: Dict[str, Any] = {}
+    
+    # projectKey (생성 시 필수)
+    if project_key:
+        payload["projectKey"] = project_key
+    elif "_rtm_projectKey" in local_issue:
+        payload["projectKey"] = local_issue["_rtm_projectKey"]
+    
+    # issueTypeId (선택적)
+    if "issueTypeId" in local_issue:
+        payload["issueTypeId"] = local_issue["issueTypeId"]
+    elif "_rtm_issueTypeId" in local_issue:
+        payload["issueTypeId"] = local_issue["_rtm_issueTypeId"]
+    
+    if "summary" in local_issue:
+        payload["summary"] = local_issue["summary"] or ""
+    if "description" in local_issue:
+        payload["description"] = local_issue["description"] or ""
+    if "assigneeId" in local_issue:
+        payload["assigneeId"] = local_issue["assigneeId"]
+    elif "assignee" in local_issue and local_issue["assignee"]:
+        payload["assigneeId"] = local_issue["assignee"]
+    
+    if parent_test_key:
+        payload["parentTestKey"] = parent_test_key
+    elif "_rtm_parentTestKey" in local_issue:
+        payload["parentTestKey"] = local_issue["_rtm_parentTestKey"]
+    
+    if "priority" in local_issue and local_issue["priority"]:
+        if isinstance(local_issue["priority"], str):
+            payload["priority"] = {"name": local_issue["priority"]}
+        else:
+            payload["priority"] = local_issue["priority"]
+    
+    if "status" in local_issue and local_issue["status"]:
+        if isinstance(local_issue["status"], str):
+            payload["status"] = {"name": local_issue["status"]}
+        else:
+            payload["status"] = local_issue["status"]
+    
+    # labels, components, versions, timeEstimate, environment
+    if "labels" in local_issue and local_issue["labels"]:
+        if isinstance(local_issue["labels"], str):
+            labels = [x.strip() for x in local_issue["labels"].split(",") if x.strip()]
+            if labels:
+                payload["labels"] = labels
+        elif isinstance(local_issue["labels"], list):
+            payload["labels"] = local_issue["labels"]
+    
+    if "components" in local_issue and local_issue["components"]:
+        if isinstance(local_issue["components"], str):
+            comp_names = [x.strip() for x in local_issue["components"].split(",") if x.strip()]
+            payload["components"] = [{"name": name} for name in comp_names]
+        elif isinstance(local_issue["components"], list):
+            payload["components"] = local_issue["components"]
+    
+    if "fix_versions" in local_issue and local_issue["fix_versions"]:
+        if isinstance(local_issue["fix_versions"], str):
+            ver_names = [x.strip() for x in local_issue["fix_versions"].split(",") if x.strip()]
+            payload["versions"] = [{"id": name} for name in ver_names]
+        elif isinstance(local_issue["fix_versions"], list):
+            payload["versions"] = local_issue["fix_versions"]
+    
+    if "timeEstimate" in local_issue:
+        payload["timeEstimate"] = local_issue["timeEstimate"]
+    elif "_rtm_timeEstimate" in local_issue:
+        payload["timeEstimate"] = local_issue["_rtm_timeEstimate"]
+    
+    if "rtm_environment" in local_issue and local_issue["rtm_environment"]:
+        payload["environment"] = local_issue["rtm_environment"]
+    elif "environment" in local_issue:
+        payload["environment"] = local_issue["environment"]
+    
+    # detectingExecutions
+    if "_rtm_detectingExecutions" in local_issue:
+        payload["detectingExecutions"] = local_issue["_rtm_detectingExecutions"]
+    
     # identifyingTestCases는 별도 API로 관리될 수 있음
     if "_rtm_identifyingTestCases" in local_issue:
         payload["identifyingTestCases"] = local_issue["_rtm_identifyingTestCases"]
@@ -1182,24 +1624,30 @@ def build_rtm_defect_payload(local_issue: Dict[str, Any], parent_test_key: Optio
     return payload
 
 
-def build_rtm_payload(issue_type: str, local_issue: Dict[str, Any], parent_test_key: Optional[str] = None) -> Dict[str, Any]:
+def build_rtm_payload(issue_type: str, local_issue: Dict[str, Any], parent_test_key: Optional[str] = None, project_key: Optional[str] = None) -> Dict[str, Any]:
     """
     로컬 이슈 데이터를 RTM API payload로 변환하는 통합 함수.
+    
+    Args:
+        issue_type: 이슈 타입 (REQUIREMENT, TEST_CASE, ...)
+        local_issue: 로컬 이슈 데이터
+        parent_test_key: 부모 폴더/이슈 키 (선택적)
+        project_key: 프로젝트 키 (생성 시 필수)
     
     issue_type에 따라 적절한 payload 생성 함수를 호출합니다.
     """
     issue_type_upper = (issue_type or "").upper()
     
     if issue_type_upper == "REQUIREMENT":
-        return build_rtm_requirement_payload(local_issue, parent_test_key)
+        return build_rtm_requirement_payload(local_issue, parent_test_key, project_key)
     elif issue_type_upper == "TEST_CASE":
-        return build_rtm_testcase_payload(local_issue, parent_test_key)
+        return build_rtm_testcase_payload(local_issue, parent_test_key, project_key)
     elif issue_type_upper == "TEST_PLAN":
-        return build_rtm_testplan_payload(local_issue, parent_test_key)
+        return build_rtm_testplan_payload(local_issue, parent_test_key, project_key)
     elif issue_type_upper == "TEST_EXECUTION":
-        return build_rtm_testexecution_payload(local_issue, parent_test_key)
+        return build_rtm_testexecution_payload(local_issue, parent_test_key, project_key)
     elif issue_type_upper == "DEFECT":
-        return build_rtm_defect_payload(local_issue, parent_test_key)
+        return build_rtm_defect_payload(local_issue, parent_test_key, project_key)
     else:
         # 기본 payload (JIRA 표준 형식 가정)
         return build_jira_create_payload(issue_type, local_issue)

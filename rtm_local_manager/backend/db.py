@@ -493,6 +493,52 @@ def get_issue_by_jira_key(conn: sqlite3.Connection, project_id: int, jira_key: s
     return dict(row) if row else None
 
 
+def get_local_issues_without_jira_key(
+    conn: sqlite3.Connection,
+    project_id: int,
+    issue_type: Optional[str] = None
+) -> List[Dict[str, Any]]:
+    """
+    jira_key가 NULL이거나 빈 문자열인 로컬 이슈들을 조회합니다.
+    
+    Args:
+        conn: SQLite 연결
+        project_id: 프로젝트 ID
+        issue_type: 이슈 타입 필터 (선택적, None이면 모든 타입)
+    
+    Returns:
+        jira_key가 없는 이슈 목록 (dict 리스트)
+    """
+    cur = conn.cursor()
+    
+    if issue_type:
+        cur.execute(
+            """
+            SELECT * FROM issues 
+            WHERE project_id = ? 
+              AND (jira_key IS NULL OR jira_key = '')
+              AND is_deleted = 0
+              AND issue_type = ?
+            ORDER BY id
+            """,
+            (project_id, issue_type.upper()),
+        )
+    else:
+        cur.execute(
+            """
+            SELECT * FROM issues 
+            WHERE project_id = ? 
+              AND (jira_key IS NULL OR jira_key = '')
+              AND is_deleted = 0
+            ORDER BY issue_type, id
+            """,
+            (project_id,),
+        )
+    
+    rows = cur.fetchall()
+    return [dict(row) for row in rows]
+
+
 
 def update_issue_fields(conn: sqlite3.Connection, issue_id: int, fields: Dict[str, Any]) -> None:
     """
