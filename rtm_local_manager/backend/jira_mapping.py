@@ -276,11 +276,21 @@ def map_local_to_jira_fields(issue_type: str, local_issue: Dict[str, Any]) -> Di
     return fields
 
 
-def build_jira_update_payload(issue_type: str, local_issue: Dict[str, Any]) -> Dict[str, Any]:
+def build_jira_update_payload(issue_type: str, local_issue: Dict[str, Any], project_key: Optional[str] = None) -> Dict[str, Any]:
     """
-    map_local_to_jira_fields() 결과를 'fields' 키 아래에 넣어 최종 payload 구성.
+    로컬 이슈 데이터를 JIRA/RTM 업데이트 payload로 변환.
+    
+    RTM 타입인 경우 build_rtm_payload를 사용하고,
+    일반 JIRA 타입인 경우 map_local_to_jira_fields를 사용합니다.
     """
-    return {"fields": map_local_to_jira_fields(issue_type, local_issue)}
+    issue_type_upper = (issue_type or "").upper()
+    
+    # RTM 타입인 경우 build_rtm_payload 사용
+    if issue_type_upper in ("REQUIREMENT", "TEST_CASE", "TEST_PLAN", "TEST_EXECUTION", "DEFECT"):
+        return build_rtm_payload(issue_type, local_issue, None, project_key)
+    else:
+        # 일반 JIRA 타입
+        return {"fields": map_local_to_jira_fields(issue_type, local_issue)}
 
 def build_jira_create_payload(issue_type: str, local_issue: Dict[str, Any]) -> Dict[str, Any]:
     """
@@ -865,56 +875,147 @@ def map_rtm_testcase_to_local(rtm_json: Dict[str, Any]) -> Dict[str, Any]:
     
     # steps는 별도로 처리 (Steps 탭에서 사용)
     # RTM steps는 stepGroups 구조 또는 2차원 배열 형태일 수 있음
-    steps_raw = rtm_json.get("steps") or []
-    # stepGroups가 있으면 그것을 사용
-    if "stepGroups" in rtm_json and isinstance(rtm_json["stepGroups"], list):
-        steps_raw = []
-        for group in rtm_json["stepGroups"]:
-            if isinstance(group, dict) and "steps" in group:
-                steps_raw.extend(group["steps"])
+    import re
     
     steps_local: List[Dict[str, Any]] = []
-    if isinstance(steps_raw, list):
-        for step_group_idx, step_group in enumerate(steps_raw, start=1):
-            if isinstance(step_group, list):
-                # 2차원 배열 형태: [[{value: "..."}], ...]
-                for step_item in step_group:
-                    if isinstance(step_item, dict):
-                        value = step_item.get("value") or ""
-                        # HTML 태그 제거
-                        import re
-                        value = re.sub(r'<[^>]+>', '', value).strip()
-                        steps_local.append({
-                            "order_no": len(steps_local) + 1,
-                            "action": value,
-                            "input": "",
-                            "expected": "",
-                        })
-            elif isinstance(step_group, dict):
-                # 단일 step 객체 형태
-                step_columns = step_group.get("stepColumns") or []
-                if step_columns:
-                    # stepColumns에서 value 추출
+    
+    # stepGroups가 있으면 그것을 우선 사용
+    if "stepGroups" in rtm_json and isinstance(rtm_json["stepGroups"], list):
+        # stepGroups 구조: [{id, name, steps: [{stepColumns: [{name, value}]}], ...}, ...]
+        # 또는 [{id, name, stepColumns: [{name, value}], ...}, ...] (단일 step인 경우)
+        for group_idx, group in enumerate(rtm_json["stepGroups"], start=1):
+            if not isinstance(group, dict):
+                continue
+            
+            # 그룹 안에 steps 배열이 있는 경우 (여러 step)
+            if "steps" in group and isinstance(group["steps"], list):
+                for step_order, step in enumerate(group["steps"], start=1):
+                    if not isinstance(step, dict):
+                        continue
+                    
+                    step_columns = step.get("stepColumns") or []
+                    if not isinstance(step_columns, list):
+                        continue
+                    
+                    # stepColumns에서 action, input, expected 추출
                     action = ""
+                    input_val = ""
                     expected = ""
+                    
                     for col in step_columns:
-                        if isinstance(col, dict):
-                            col_name = col.get("name", "").lower()
-                            col_value = col.get("value") or ""
-                            if "action" in col_name:
-                                action = col_value
-                            elif "expected" in col_name or "result" in col_name:
-                                expected = col_value
-                    if action:
-                        import re
-                        action = re.sub(r'<[^>]+>', '', action).strip()
-                        expected = re.sub(r'<[^>]+>', '', expected).strip()
+                        if not isinstance(col, dict):
+                            continue
+                        
+                        col_name = (col.get("name") or "").lower()
+                        col_value = col.get("value") or ""
+                        
+                        # HTML 태그 제거
+                        col_value = re.sub(r'<[^>]+>', '', col_value).strip()
+                        
+                        # 컬럼 이름에 따라 분류
+                        if "action" in col_name or "step" in col_name:
+                            action = col_value
+                        elif "input" in col_name or "data" in col_name:
+                            input_val = col_value
+                        elif "expected" in col_name or "result" in col_name or "output" in col_name:
+                            expected = col_value
+                    
+                    # action 또는 expected가 있으면 step 추가
+                    if action or expected:
                         steps_local.append({
                             "order_no": len(steps_local) + 1,
+                            "group_no": group_idx,
                             "action": action,
-                            "input": "",
+                            "input": input_val,
                             "expected": expected,
                         })
+            
+            # 그룹에 stepColumns가 직접 있는 경우 (단일 step)
+            elif "stepColumns" in group:
+                step_columns = group.get("stepColumns") or []
+                if isinstance(step_columns, list):
+                    # stepColumns에서 action, input, expected 추출
+                    action = ""
+                    input_val = ""
+                    expected = ""
+                    
+                    for col in step_columns:
+                        if not isinstance(col, dict):
+                            continue
+                        
+                        col_name = (col.get("name") or "").lower()
+                        col_value = col.get("value") or ""
+                        
+                        # HTML 태그 제거
+                        col_value = re.sub(r'<[^>]+>', '', col_value).strip()
+                        
+                        # 컬럼 이름에 따라 분류
+                        if "action" in col_name or "step" in col_name:
+                            action = col_value
+                        elif "input" in col_name or "data" in col_name:
+                            input_val = col_value
+                        elif "expected" in col_name or "result" in col_name or "output" in col_name:
+                            expected = col_value
+                    
+                    # action 또는 expected가 있으면 step 추가
+                    if action or expected:
+                        steps_local.append({
+                            "order_no": len(steps_local) + 1,
+                            "group_no": group_idx,
+                            "action": action,
+                            "input": input_val,
+                            "expected": expected,
+                        })
+    
+    # stepGroups가 없고 steps가 직접 있는 경우
+    elif "steps" in rtm_json:
+        steps_raw = rtm_json.get("steps") or []
+        
+        if isinstance(steps_raw, list):
+            for step_group_idx, step_group in enumerate(steps_raw, start=1):
+                if isinstance(step_group, list):
+                    # 2차원 배열 형태: [[{value: "..."}], ...]
+                    for step_item in step_group:
+                        if isinstance(step_item, dict):
+                            value = step_item.get("value") or ""
+                            # HTML 태그 제거
+                            value = re.sub(r'<[^>]+>', '', value).strip()
+                            steps_local.append({
+                                "order_no": len(steps_local) + 1,
+                                "group_no": step_group_idx,
+                                "action": value,
+                                "input": "",
+                                "expected": "",
+                            })
+                elif isinstance(step_group, dict):
+                    # 단일 step 객체 형태
+                    step_columns = step_group.get("stepColumns") or []
+                    if step_columns:
+                        # stepColumns에서 value 추출
+                        action = ""
+                        input_val = ""
+                        expected = ""
+                        for col in step_columns:
+                            if isinstance(col, dict):
+                                col_name = (col.get("name") or "").lower()
+                                col_value = col.get("value") or ""
+                                col_value = re.sub(r'<[^>]+>', '', col_value).strip()
+                                
+                                if "action" in col_name or "step" in col_name:
+                                    action = col_value
+                                elif "input" in col_name or "data" in col_name:
+                                    input_val = col_value
+                                elif "expected" in col_name or "result" in col_name:
+                                    expected = col_value
+                        
+                        if action or expected:
+                            steps_local.append({
+                                "order_no": len(steps_local) + 1,
+                                "group_no": step_group_idx,
+                                "action": action,
+                                "input": input_val,
+                                "expected": expected,
+                            })
     
     updates["_rtm_steps"] = steps_local
     

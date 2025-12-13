@@ -8597,10 +8597,11 @@ class MainWindow(QMainWindow):
             "assignee": tabs.ed_assignee.text().strip(),
             "reporter": tabs.ed_reporter.text().strip(),
             "labels": tabs.ed_labels.text().strip(),
-            "components": tabs.ed_components.text().strip(),
+            # QComboBox는 currentText() 사용
+            "components": tabs.ed_components.currentText().strip(),
             "security_level": tabs.ed_security_level.text().strip(),
-            "fix_versions": tabs.ed_fix_versions.text().strip(),
-            "affects_versions": tabs.ed_affects_versions.text().strip(),
+            "fix_versions": tabs.ed_fix_versions.currentText().strip(),
+            "affects_versions": tabs.ed_affects_versions.currentText().strip(),
             "epic_link": tabs.ed_epic_link.text().strip(),
             "sprint": tabs.ed_sprint.text().strip(),
             "rtm_environment": tabs.ed_rtm_env.currentText().strip(),
@@ -9551,7 +9552,8 @@ class MainWindow(QMainWindow):
             return
 
         # 로컬 필드를 JIRA payload로 변환 (mapping layer 사용)
-        payload = jira_mapping.build_jira_update_payload(issue_type, issue)
+        project_key = self.project.key if self.project else None
+        payload = jira_mapping.build_jira_update_payload(issue_type, issue, project_key)
 
         try:
             self.status_bar.showMessage(f"Pushing to JIRA: {jira_key} ({issue_type})...")
