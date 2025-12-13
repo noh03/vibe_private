@@ -3506,14 +3506,16 @@ class PanelWidget(QWidget):
         header_layout.addStretch()
 
         if is_online:
-            # 온라인(JIRA) 패널: 트리 갱신 / Local 로 동기화 / JIRA 엔티티 생성/삭제
+            # 온라인(JIRA) 패널: 트리 갱신 / Local 로 동기화 / JIRA 엔티티 생성/삭제/저장
             self.btn_refresh = QPushButton("Refresh")
             self.btn_sync_down = QPushButton("Sync → Local")
             self.btn_create_jira = QPushButton("Create in JIRA")
+            self.btn_save_jira = QPushButton("Save")
             self.btn_delete_jira = QPushButton("Delete in JIRA")
             header_layout.addWidget(self.btn_refresh)
             header_layout.addWidget(self.btn_sync_down)
             header_layout.addWidget(self.btn_create_jira)
+            header_layout.addWidget(self.btn_save_jira)
             header_layout.addWidget(self.btn_delete_jira)
         else:
             # 로컬 패널: 상단 헤더에는 제목만 두고, 트리 바로 위 아이콘 툴바에서
@@ -7424,7 +7426,167 @@ class MainWindow(QMainWindow):
             self.left_panel.btn_add_to_testplan.clicked.connect(self.on_add_testcases_to_testplan_clicked)
         if hasattr(self.left_panel, "btn_link_requirement"):
             self.left_panel.btn_link_requirement.clicked.connect(self.on_link_testcases_to_requirement_clicked)
-        # Execute 버튼은 향후 Test Execution 흐름과 연계 (현재는 별도 동작 없음)
+        if hasattr(self.left_panel, "btn_execute_tc"):
+            self.left_panel.btn_execute_tc.clicked.connect(self.on_execute_testcase_clicked)
+    
+    def on_execute_testcase_clicked(self):
+        """
+        로컬 패널의 Test Case Execute 버튼 클릭 시:
+        - 선택된 Test Case를 포함하는 Test Plan을 선택하거나 생성하여 실행합니다.
+        - RTM에서는 Test Case는 Test Plan에 포함되어야만 실행할 수 있습니다.
+        """
+        if not self.project:
+            self.status_bar.showMessage("No project loaded; cannot execute test case.")
+            return
+        
+        # 선택된 Test Case 확인
+        tc_ids = self._selected_local_testcase_ids()
+        if not tc_ids:
+            self.status_bar.showMessage("No Test Case selected in the tree.")
+            return
+        
+        if len(tc_ids) > 1:
+            self.status_bar.showMessage("Please select only one Test Case to execute.")
+            return
+        
+        tc_id = tc_ids[0]
+        tc_issue = get_issue_by_id(self.conn, tc_id)
+        if not tc_issue or (tc_issue.get("issue_type") or "").upper() != "TEST_CASE":
+            self.status_bar.showMessage("Selected issue is not a Test Case.")
+            return
+        
+        # Test Plan 선택 또는 생성 다이얼로그
+        from PySide6.QtWidgets import (
+            QDialog,
+            QVBoxLayout,
+            QHBoxLayout,
+            QDialogButtonBox,
+            QListWidget,
+            QListWidgetItem,
+            QLabel,
+            QPushButton,
+        )
+        
+        dlg = QDialog(self)
+        dlg.setWindowTitle("Execute Test Case")
+        vbox = QVBoxLayout(dlg)
+        
+        vbox.addWidget(QLabel(
+            "Test Case는 Test Plan에 포함되어야만 실행할 수 있습니다.\n"
+            "다음 중 하나를 선택하세요:"
+        ))
+        
+        # 기존 Test Plan 목록
+        cur = self.conn.cursor()
+        cur.execute(
+            """
+            SELECT id, jira_key, summary
+              FROM issues
+             WHERE project_id = ? AND is_deleted = 0 AND UPPER(issue_type) = 'TEST_PLAN'
+             ORDER BY jira_key, summary
+            """,
+            (self.project.id,),
+        )
+        rows = cur.fetchall()
+        plans = [dict(r) for r in rows]
+        
+        if plans:
+            vbox.addWidget(QLabel("기존 Test Plan 선택:"))
+            lst = QListWidget()
+            for p in plans:
+                key = p.get("jira_key") or f"ID={p.get('id')}"
+                text = key
+                if p.get("summary"):
+                    text += f" - {p.get('summary')}"
+                item = QListWidgetItem(text)
+                item.setData(Qt.UserRole, p.get("id"))
+                lst.addItem(item)
+            vbox.addWidget(lst)
+        else:
+            vbox.addWidget(QLabel("기존 Test Plan이 없습니다. 새로 생성하세요."))
+            lst = None
+        
+        btn_layout = QHBoxLayout()
+        btn_new_plan = QPushButton("새 Test Plan 생성")
+        btn_layout.addWidget(btn_new_plan)
+        btn_layout.addStretch()
+        vbox.addLayout(btn_layout)
+        
+        btn_box = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
+        if not plans:
+            btn_box.button(QDialogButtonBox.Ok).setEnabled(False)
+        vbox.addWidget(btn_box)
+        
+        selected_plan_id = None
+        
+        def on_new_plan():
+            nonlocal selected_plan_id
+            # 새 Test Plan 생성
+            from PySide6.QtWidgets import QInputDialog
+            name, ok = QInputDialog.getText(dlg, "New Test Plan", "Test Plan name:")
+            if not ok or not name.strip():
+                return
+            
+            folder_id = tc_issue.get("folder_id")
+            new_tp_id = create_local_issue(
+                self.conn,
+                self.project.id,
+                issue_type="TEST_PLAN",
+                folder_id=folder_id,
+                summary=name.strip(),
+            )
+            
+            # Test Case를 Test Plan에 추가
+            replace_testplan_testcases(self.conn, new_tp_id, [
+                {"testcase_id": tc_id, "order_no": 1}
+            ])
+            
+            selected_plan_id = new_tp_id
+            dlg.accept()
+        
+        def on_accept():
+            nonlocal selected_plan_id
+            if lst and lst.currentItem():
+                selected_plan_id = lst.currentItem().data(Qt.UserRole)
+            if not selected_plan_id:
+                return
+            
+            # Test Plan에 Test Case가 포함되어 있는지 확인하고, 없으면 추가
+            existing = get_testplan_testcases(self.conn, int(selected_plan_id))
+            existing_tc_ids = {int(r.get("testcase_id")) for r in existing if r.get("testcase_id")}
+            
+            if tc_id not in existing_tc_ids:
+                records = [
+                    {"testcase_id": int(r["testcase_id"]), "order_no": int(r.get("order_no", 0) or 0)}
+                    for r in existing
+                ]
+                records.append({"testcase_id": tc_id, "order_no": len(records) + 1})
+                replace_testplan_testcases(self.conn, int(selected_plan_id), records)
+            
+            # Test Plan 선택 후 Executions 탭으로 이동하여 Execute 버튼 클릭
+            # 현재 이슈를 Test Plan으로 변경
+            self.current_issue_id = selected_plan_id
+            self.reload_local_tree()
+            
+            # Test Plan 이슈 탭의 Executions 탭으로 이동
+            if hasattr(self.left_panel.issue_tabs, "setCurrentWidget"):
+                # Executions 탭 찾기
+                for i in range(self.left_panel.issue_tabs.count()):
+                    if self.left_panel.issue_tabs.tabText(i) == "Executions":
+                        self.left_panel.issue_tabs.setCurrentIndex(i)
+                        break
+            
+            # Execute Test Plan 버튼 클릭
+            if hasattr(self.left_panel.issue_tabs, "btn_execute_plan"):
+                self.left_panel.issue_tabs.btn_execute_plan.click()
+            
+            dlg.accept()
+        
+        btn_new_plan.clicked.connect(on_new_plan)
+        btn_box.accepted.connect(on_accept)
+        btn_box.rejected.connect(dlg.reject)
+        
+        dlg.exec()
 
         # ------------------------------------------------------------------
         # Local tree: keyboard shortcuts (Ctrl+A/C/X/V)
@@ -7502,12 +7664,23 @@ class MainWindow(QMainWindow):
 
         # Right panel buttons (온라인 관련)
         if self.jira_available:
+            # 온라인 패널 헤더 버튼
             self.right_panel.btn_refresh.clicked.connect(self.on_refresh_online_tree)
             self.right_panel.btn_sync_down.clicked.connect(self.on_full_sync_clicked)
-            # JIRA create/delete (온라인 패널 헤더에 위치)
             # 온라인 패널의 "Create in JIRA" 버튼: 새 이슈 생성 (온라인 패널 전용)
             self.right_panel.btn_create_jira.clicked.connect(self.on_create_new_online_issue_clicked)
+            self.right_panel.btn_save_jira.clicked.connect(self.on_save_online_issue_clicked)
             self.right_panel.btn_delete_jira.clicked.connect(self.on_delete_in_jira_clicked)
+            
+            # 온라인 패널 트리 툴바 버튼 (있는 경우)
+            if hasattr(self.right_panel, "btn_online_refresh"):
+                self.right_panel.btn_online_refresh.clicked.connect(self.on_refresh_online_tree)
+            if hasattr(self.right_panel, "btn_online_sync_down"):
+                self.right_panel.btn_online_sync_down.clicked.connect(self.on_full_sync_clicked)
+            if hasattr(self.right_panel, "btn_online_create"):
+                self.right_panel.btn_online_create.clicked.connect(self.on_create_new_online_issue_clicked)
+            if hasattr(self.right_panel, "btn_online_delete"):
+                self.right_panel.btn_online_delete.clicked.connect(self.on_delete_in_jira_clicked)
             # 온라인 패널 트리 selection
             r_selection = self.right_panel.tree_view.selectionModel()
             if r_selection is not None:
@@ -7530,6 +7703,7 @@ class MainWindow(QMainWindow):
         self.left_panel.btn_new_issue.clicked.connect(self.on_new_local_issue_clicked)
         self.left_panel.btn_delete_issue.clicked.connect(self.on_delete_local_issue_clicked)
         self.left_panel.btn_save_issue.clicked.connect(self.on_save_issue_clicked)
+        self.left_panel.btn_sync_up.clicked.connect(self.on_push_issue_clicked)
 
         # Local / Online 트리 컨텍스트 메뉴 (우클릭)
         self.left_panel.tree_view.setContextMenuPolicy(Qt.CustomContextMenu)
@@ -8961,8 +9135,11 @@ class MainWindow(QMainWindow):
             # 이슈 탭에서 수정된 데이터 수집
             issue_updates = tabs.get_issue_updates()
             
+            # 프로젝트 키 추가
+            project_key = self.project.key if self.project else None
+            
             # RTM payload 생성
-            payload = jira_mapping.build_rtm_payload(issue_type, issue_updates)
+            payload = jira_mapping.build_rtm_payload(issue_type, issue_updates, None, project_key)
             
             # RTM API로 업데이트
             self.jira_client.update_entity(issue_type, jira_key, payload)
@@ -9509,7 +9686,11 @@ class MainWindow(QMainWindow):
         issue_type = issue.get("issue_type")
         jira_key = issue.get("jira_key")
         if not jira_key:
-            self.status_bar.showMessage("Selected issue has no JIRA key; cannot push.")
+            # jira_key가 없으면 Push 불가 (신규 생성은 "Create in JIRA" 버튼 사용)
+            self.status_bar.showMessage(
+                "Selected issue has no JIRA key; cannot push. "
+                "To create a new issue in JIRA, use 'Create in JIRA' button instead."
+            )
             return
 
         # 동기화 영향 설명 및 사용자 확인 (Sync 모드에 따라 안내 문구 조정)
