@@ -4560,7 +4560,6 @@ class MainWindow(QMainWindow):
         - 사용자가 임의의 메서드/경로/바디를 입력해서 REST 호출을 시험할 수 있는 다이얼로그.
         - 현재 jira_config 의 base_url / auth 를 사용한다.
         """
-        from PySide6.QtCore import Qt
         from PySide6.QtWidgets import (
             QDialog,
             QVBoxLayout,
@@ -4572,8 +4571,6 @@ class MainWindow(QMainWindow):
             QPushButton,
             QDialogButtonBox,
             QMessageBox,
-            QSplitter,
-            QWidget,
         )
         from requests.auth import HTTPBasicAuth
         import requests
@@ -4611,41 +4608,22 @@ class MainWindow(QMainWindow):
         row_top.addWidget(ed_path)
         vbox.addLayout(row_top)
 
+        # Request body
+        vbox.addWidget(QLabel("Request Body (JSON/text, 선택 사항):"))
+        ed_body = QPlainTextEdit()
+        vbox.addWidget(ed_body)
+
         # Send 버튼
         btn_send = QPushButton("Send Request")
         vbox.addWidget(btn_send)
 
-        # Status 표시
+        # Response 표시
         lbl_status = QLabel("Status: -")
         vbox.addWidget(lbl_status)
-
-        # Request Body와 Response Body를 QSplitter로 감싸서 높이 조정 가능하게
-        splitter = QSplitter(Qt.Vertical)
-        
-        # Request Body 영역
-        req_widget = QWidget()
-        req_layout = QVBoxLayout(req_widget)
-        req_layout.setContentsMargins(0, 0, 0, 0)
-        req_layout.addWidget(QLabel("Request Body (JSON/text, 선택 사항):"))
-        ed_body = QPlainTextEdit()
-        req_layout.addWidget(ed_body)
-        splitter.addWidget(req_widget)
-        
-        # Response Body 영역
-        resp_widget = QWidget()
-        resp_layout = QVBoxLayout(resp_widget)
-        resp_layout.setContentsMargins(0, 0, 0, 0)
-        resp_layout.addWidget(QLabel("Response Body:"))
+        vbox.addWidget(QLabel("Response Body:"))
         ed_resp = QPlainTextEdit()
         ed_resp.setReadOnly(True)
-        resp_layout.addWidget(ed_resp)
-        splitter.addWidget(resp_widget)
-        
-        # Splitter의 초기 비율 설정 (Request:Response = 1:1)
-        splitter.setStretchFactor(0, 1)
-        splitter.setStretchFactor(1, 1)
-        
-        vbox.addWidget(splitter)
+        vbox.addWidget(ed_resp)
 
         btn_box = QDialogButtonBox(QDialogButtonBox.Close)
         vbox.addWidget(btn_box)
@@ -5936,59 +5914,102 @@ class MainWindow(QMainWindow):
                 """
                 RTM 온라인 트리에서도 현재 이슈 타입에 해당하는 서브트리만 보여준다.
                 RETURNS: 이 노드가 실제로 추가되었는지 여부.
+                
+                실제 응답 구조 (requirements, test-cases, test-plans, test-executions, defects):
+                - 루트 노드: id, testKey (예: "F-KVHSICCU-RQ"), folderName (예: "All"), children 배열
+                - 폴더 노드: testKey (예: "F-KVHSICCU-RQ-6"), folderName (예: "ICCU"), children 배열
+                - 이슈 노드: testKey (예: "KVHSICCU-73"), issueId (예: 3142769)
                 """
-                node_type = (node.get("type") or "").upper()
-                key = node.get("jiraKey") or node.get("key") or ""
-                name = node.get("name") or node.get("summary") or key or ""
-
-                type_filter = self.online_issue_type_filter
-
-                # 이슈 노드
-                if node_type != "FOLDER":
-                    if type_filter and node_type != type_filter:
-                        return False
-                    if key and name:
-                        label = f"{key} - {name}"
-                    elif key:
-                        label = key
-                    else:
-                        label = name or "(no key)"
-
+                # 폴더인지 이슈인지 판단: folderName이 있으면 폴더, issueId가 있으면 이슈
+                folder_name = node.get("folderName")
+                issue_id = node.get("issueId")
+                test_key = node.get("testKey") or ""
+                
+                # 폴더 노드 처리
+                if folder_name is not None:
+                    label = f"[Folder] {folder_name}"
                     item = QStandardItem(label)
                     item.setEditable(False)
-                    item.setData(node_type, Qt.UserRole)
-                    item.setData(key, Qt.UserRole + 1)
+                    item.setData("FOLDER", Qt.UserRole)
+                    item.setData(test_key, Qt.UserRole + 1)
+                    item.setIcon(folder_icon)
+
+                    has_visible_child = False
+                    children = node.get("children", [])
+                    for child in children:
+                        if add_online_node(item, child):
+                            has_visible_child = True
+
+                    if not has_visible_child:
+                        return False
+
+                    parent_item.appendRow(item)
+                    return True
+                
+                # 이슈 노드 처리
+                if issue_id is not None:
+                    # testKey를 키로 사용, 이름은 testKey 사용
+                    # 이슈 타입 필터링은 현재 필터가 없거나, 노드의 type 필드와 일치할 때만 표시
+                    node_type_from_field = (node.get("type") or "").upper()
+                    type_filter = self.online_issue_type_filter
+                    
+                    # type 필터가 있고, 노드의 type이 필터와 일치하지 않으면 스킵
+                    # (실제 응답에 type 필드가 없을 수 있으므로, 필터가 있으면 현재 트리 타입을 기준으로 판단)
+                    if type_filter and node_type_from_field and node_type_from_field != type_filter:
+                        return False
+                    
+                    # 이슈 표시: testKey를 기본으로 사용
+                    label = test_key if test_key else f"(no key) - {issue_id}"
+                    
+                    # 현재 트리 타입에 맞는 이슈 타입 설정
+                    default_issue_type = type_filter or "REQUIREMENT"
+                    if tree_type == "test-cases":
+                        default_issue_type = "TEST_CASE"
+                    elif tree_type == "test-plans":
+                        default_issue_type = "TEST_PLAN"
+                    elif tree_type == "test-executions":
+                        default_issue_type = "TEST_EXECUTION"
+                    elif tree_type == "defects":
+                        default_issue_type = "DEFECT"
+                    
+                    item = QStandardItem(label)
+                    item.setEditable(False)
+                    item.setData(node_type_from_field or default_issue_type, Qt.UserRole)
+                    item.setData(test_key, Qt.UserRole + 1)
                     item.setIcon(issue_icon)
                     parent_item.appendRow(item)
                     return True
-
-                # 폴더 노드: 하위에 표시 가능한 이슈/폴더가 하나라도 있어야만 표시
-                label = f"[Folder] {name}"
-                item = QStandardItem(label)
-                item.setEditable(False)
-                item.setData(node_type, Qt.UserRole)
-                item.setData(key, Qt.UserRole + 1)
-                item.setIcon(folder_icon)
-
+                
+                # 폴더도 이슈도 아닌 경우 (예: 루트 노드 또는 children만 있는 노드)
+                # 루트 노드는 children만 처리
+                children = node.get("children", [])
                 has_visible_child = False
-                for child in node.get("children", []):
-                    if add_online_node(item, child):
+                for child in children:
+                    if add_online_node(parent_item, child):
                         has_visible_child = True
+                
+                return has_visible_child
 
-                if not has_visible_child:
-                    return False
-
-                parent_item.appendRow(item)
-                return True
-
-            roots: List[Dict[str, Any]] = []
+            # 실제 응답 구조에 맞게 루트 노드 처리
+            # 응답이 단일 객체인 경우 (id, testKey, folderName, children을 가진 루트 객체)
+            # 또는 배열인 경우, 또는 dict에 roots/children 키가 있는 경우를 모두 처리
             if isinstance(tree, list):
-                roots = tree
+                # 배열인 경우: 각 요소를 루트로 처리
+                for r in tree:
+                    add_online_node(root_item, r)
             elif isinstance(tree, dict):
-                roots = tree.get("roots") or tree.get("children") or []
-
-            for r in roots:
-                add_online_node(root_item, r)
+                # 딕셔너리인 경우
+                if "roots" in tree:
+                    # roots 키가 있으면 그것을 사용
+                    roots = tree.get("roots", [])
+                    for r in roots:
+                        add_online_node(root_item, r)
+                elif "children" in tree:
+                    # children 키가 있으면 루트 객체 자체를 처리 (루트가 폴더일 수 있음)
+                    add_online_node(root_item, tree)
+                else:
+                    # 그 외의 경우: 루트 객체 자체를 처리
+                    add_online_node(root_item, tree)
 
             self.right_panel.tree_view.setModel(model)
             self.right_panel.tree_view.expandAll()
