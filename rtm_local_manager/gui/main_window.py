@@ -3747,6 +3747,9 @@ class MainWindow(QMainWindow):
         # currently selected issue id (local DB)
         self.current_issue_id: int | None = None
         self.current_issue_type: str | None = None
+        # 온라인 이슈 추적 (우측 패널에서 선택된 이슈)
+        self.current_online_issue_key: str | None = None
+        self.current_online_issue_type: str | None = None
         self.current_testexecution_id: int | None = None
 
         # 로컬 트리 Cut/Copy/Paste 용 클립보드
@@ -5788,29 +5791,123 @@ class MainWindow(QMainWindow):
         # 폴더는 무시
         if node_type == "FOLDER" or not jira_key:
             self.right_panel.issue_tabs.set_issue(None)
+            self.current_online_issue_key = None
+            self.current_online_issue_type = None
             return
 
         issue_type = node_type  # RTM Tree 에서 오는 type 을 그대로 사용
+        
+        # 온라인 이슈 추적
+        self.current_online_issue_key = jira_key
+        self.current_online_issue_type = issue_type
 
         tabs = self.right_panel.issue_tabs
 
         try:
-            # 1) 기본 필드: Jira 표준 REST API 로 개별 이슈 조회
-            #    (fields 구조를 가진 JSON -> jira_mapping.map_jira_to_local 로 변환)
-            jira_issue_json = self.jira_client.get_jira_issue(jira_key)
-            updates = jira_mapping.map_jira_to_local(issue_type, jira_issue_json)
+            self.status_bar.showMessage(f"Loading online issue {jira_key}...")
+            QApplication.setOverrideCursor(Qt.WaitCursor)
+            
+            # RTM API로 직접 이슈 조회
+            rtm_json = self.jira_client.get_entity(issue_type, jira_key)
+            if not rtm_json:
+                self.right_panel.issue_tabs.set_issue(None)
+                self.status_bar.showMessage(f"Failed to load issue {jira_key}: No data returned")
+                return
+            
+            # RTM 응답을 로컬 형식으로 변환
+            updates = jira_mapping.map_rtm_to_local(issue_type, rtm_json)
             issue_like: Dict[str, Any] = {
                 "issue_type": issue_type,
                 "jira_key": jira_key,
                 **updates,
             }
             tabs.set_issue(issue_like)
-
-            # 2) Relations (Jira issue links)
+            
+            # 이슈 타입별 추가 데이터 로드
+            issue_type_upper = issue_type.upper()
+            
+            # Requirement: testCasesCovered
+            if issue_type_upper == "REQUIREMENT":
+                test_cases_covered = updates.get("_rtm_testCasesCovered", [])
+                if hasattr(tabs, "load_testcases_covered"):
+                    tabs.load_testcases_covered(test_cases_covered)
+                elif hasattr(tabs, "load_test_cases"):
+                    # Test Cases 탭에 표시
+                    tabs.load_test_cases(test_cases_covered)
+            
+            # Test Case: steps, preconditions
+            elif issue_type_upper == "TEST_CASE":
+                # Steps
+                steps = updates.get("_rtm_steps", [])
+                if hasattr(tabs, "load_steps"):
+                    tabs.load_steps(steps)
+                
+                # Preconditions
+                preconditions = updates.get("_rtm_preconditions", "")
+                if hasattr(tabs, "load_preconditions"):
+                    tabs.load_preconditions(preconditions)
+            
+            # Test Plan: includedTestCases
+            elif issue_type_upper == "TEST_PLAN":
+                included_test_cases = updates.get("_rtm_includedTestCases", [])
+                if hasattr(tabs, "load_testplan_testcases"):
+                    # includedTestCases를 testplan_testcases 형식으로 변환
+                    testplan_tc_records = []
+                    for idx, tc in enumerate(included_test_cases, start=1):
+                        if isinstance(tc, dict):
+                            test_key = tc.get("testKey") or ""
+                        else:
+                            test_key = str(tc) if tc else ""
+                        if test_key:
+                            testplan_tc_records.append({
+                                "order_no": idx,
+                                "testcase_id": None,  # 온라인에서는 ID가 없음
+                                "testcase_jira_key": test_key,
+                                "summary": "",
+                            })
+                    tabs.load_testplan_testcases(testplan_tc_records)
+            
+            # Test Execution: testCaseExecutions, testPlan
+            elif issue_type_upper == "TEST_EXECUTION":
+                test_case_executions = updates.get("_rtm_testCaseExecutions", [])
+                if hasattr(tabs, "load_testexecution_testcases"):
+                    # testCaseExecutions를 testcase_executions 형식으로 변환
+                    execution_records = []
+                    for idx, tce in enumerate(test_case_executions, start=1):
+                        if isinstance(tce, dict):
+                            execution_records.append({
+                                "order_no": idx,
+                                "testcase_id": None,
+                                "testcase_jira_key": tce.get("testKey") or "",
+                                "summary": tce.get("summary") or "",
+                                "assignee": tce.get("assigneeId") or "",
+                                "result": tce.get("result", {}).get("name") if isinstance(tce.get("result"), dict) else "",
+                                "rtm_environment": "",
+                                "defects": "",
+                                "actual_time": tce.get("actualTime") or 0,
+                            })
+                    tabs.load_testexecution_testcases(execution_records)
+                
+                # Test Plan 정보
+                test_plan = updates.get("_rtm_testPlan")
+                if test_plan and isinstance(test_plan, dict):
+                    test_plan_key = test_plan.get("testKey") or ""
+                    if hasattr(tabs, "set_test_plan"):
+                        tabs.set_test_plan(test_plan_key)
+            
+            # Defect: identifyingTestCases
+            elif issue_type_upper == "DEFECT":
+                identifying_test_cases = updates.get("_rtm_identifyingTestCases", [])
+                if hasattr(tabs, "load_identifying_testcases"):
+                    tabs.load_identifying_testcases(identifying_test_cases)
+                elif hasattr(tabs, "load_test_cases"):
+                    tabs.load_test_cases(identifying_test_cases)
+            
+            # Relations (Jira issue links) - JIRA 표준 API로 조회
             try:
+                jira_issue_json = self.jira_client.get_jira_issue(jira_key)
                 rel_entries = jira_mapping.extract_relations_from_jira(jira_issue_json)
                 if hasattr(tabs, "load_relations"):
-                    # Online 뷰에서는 dst_issue_id 가 없으므로 None 으로 두고 표시만 한다.
                     rels_for_ui = []
                     for r in rel_entries:
                         rels_for_ui.append(
@@ -5823,21 +5920,16 @@ class MainWindow(QMainWindow):
                         )
                     tabs.load_relations(rels_for_ui)
             except Exception as e_rel:
-                print(f"[WARN] Failed to load online relations: {e_rel}")
-
-            # 3) RTM 전용 정보: 예를 들어 Test Case Steps 등은 RTM v1 REST API 사용
-            if issue_type == "TEST_CASE":
-                try:
-                    steps_json = self.jira_client.get_testcase_steps(jira_key)
-                    local_steps = jira_mapping.map_jira_testcase_steps_to_local(steps_json)
-                    if hasattr(tabs, "load_steps"):
-                        tabs.load_steps(local_steps)
-                except Exception as e_steps:
-                    print(f"[WARN] Failed to load online Test Case steps: {e_steps}")
+                self.logger.warning(f"Failed to load online relations: {e_rel}")
+            
+            self.status_bar.showMessage(f"Loaded online issue {jira_key}")
 
         except Exception as e:
             self.status_bar.showMessage(f"Failed to load online issue {jira_key}: {e}")
-            print(f"[ERROR] Failed to load online issue {jira_key}: {e}")
+            self.logger.error(f"Failed to load online issue {jira_key}: {e}", exc_info=True)
+            tabs.set_issue(None)
+        finally:
+            QApplication.restoreOverrideCursor()
 
     # --------------------------------------------------------------------- Full sync / online tree
 
@@ -8402,7 +8494,11 @@ class MainWindow(QMainWindow):
             self.status_bar.showMessage(f"Creating new {issue_type} in JIRA...")
             QApplication.setOverrideCursor(Qt.WaitCursor)
 
-            payload = jira_mapping.build_jira_create_payload(issue_type, issue)
+            # RTM payload 사용 (parentTestKey는 선택된 폴더에서 가져올 수 있음)
+            parent_test_key = None  # TODO: 온라인 트리에서 선택된 폴더의 testKey 사용
+            payload = jira_mapping.build_rtm_payload(issue_type, issue, parent_test_key)
+            
+            # RTM API로 생성
             resp = self.jira_client.create_entity(issue_type, payload)
 
             new_key = None
@@ -8424,6 +8520,103 @@ class MainWindow(QMainWindow):
         except Exception as e:
             self.status_bar.showMessage(f"Create in JIRA failed: {e}")
             print(f"[ERROR] Create in JIRA failed: {e}")
+        finally:
+            QApplication.restoreOverrideCursor()
+
+    def on_save_online_issue_clicked(self):
+        """
+        현재 우측(Online) 패널에서 선택된 이슈의 수정 사항을 RTM API로 저장한다.
+        """
+        if not self.jira_available or not self.jira_client:
+            self.status_bar.showMessage("Cannot save: Jira RTM not configured.")
+            return
+        
+        if not self.current_online_issue_key or not self.current_online_issue_type:
+            self.status_bar.showMessage("No online issue selected to save.")
+            return
+        
+        jira_key = self.current_online_issue_key
+        issue_type = self.current_online_issue_type
+        tabs = self.right_panel.issue_tabs
+        
+        try:
+            self.status_bar.showMessage(f"Saving online issue {jira_key}...")
+            QApplication.setOverrideCursor(Qt.WaitCursor)
+            
+            # 이슈 탭에서 수정된 데이터 수집
+            issue_updates = tabs.get_issue_updates()
+            
+            # RTM payload 생성
+            payload = jira_mapping.build_rtm_payload(issue_type, issue_updates)
+            
+            # RTM API로 업데이트
+            self.jira_client.update_entity(issue_type, jira_key, payload)
+            
+            # 이슈 타입별 추가 업데이트
+            issue_type_upper = issue_type.upper()
+            
+            # Test Case: Steps 업데이트
+            if issue_type_upper == "TEST_CASE" and hasattr(tabs, "collect_steps"):
+                try:
+                    steps = tabs.collect_steps()
+                    if steps:
+                        steps_payload = jira_mapping.build_jira_testcase_steps_payload(steps)
+                        self.jira_client.update_testcase_steps(jira_key, steps_payload)
+                except Exception as e_steps:
+                    self.logger.warning(f"Failed to update Test Case steps: {e_steps}")
+            
+            # Test Plan: includedTestCases 업데이트
+            if issue_type_upper == "TEST_PLAN" and hasattr(tabs, "collect_testplan_testcases"):
+                try:
+                    tc_records = tabs.collect_testplan_testcases()
+                    if tc_records:
+                        # testKey만 추출
+                        test_keys = []
+                        for rec in tc_records:
+                            key = rec.get("testcase_jira_key") or rec.get("jira_key") or ""
+                            if key:
+                                test_keys.append({"testKey": key})
+                        if test_keys:
+                            # RTM Test Plan의 includedTestCases 업데이트는 별도 API일 수 있음
+                            # 여기서는 payload에 포함
+                            payload["includedTestCases"] = test_keys
+                            self.jira_client.update_entity(issue_type, jira_key, payload)
+                except Exception as e_tp:
+                    self.logger.warning(f"Failed to update Test Plan test cases: {e_tp}")
+            
+            # Test Execution: testCaseExecutions 업데이트
+            if issue_type_upper == "TEST_EXECUTION" and hasattr(tabs, "collect_testexecution_testcases"):
+                try:
+                    exec_records = tabs.collect_testexecution_testcases()
+                    if exec_records:
+                        # RTM Test Execution의 testCaseExecutions 업데이트는 별도 API일 수 있음
+                        # 여기서는 payload에 포함
+                        tce_list = []
+                        for rec in exec_records:
+                            tce_item = {
+                                "testKey": rec.get("testcase_jira_key") or rec.get("jira_key") or "",
+                            }
+                            if rec.get("assignee"):
+                                tce_item["assigneeId"] = rec["assignee"]
+                            if rec.get("result"):
+                                tce_item["result"] = {"name": rec["result"]}
+                            if rec.get("actual_time"):
+                                tce_item["actualTime"] = rec["actual_time"]
+                            tce_list.append(tce_item)
+                        if tce_list:
+                            payload["testCaseExecutions"] = tce_list
+                            self.jira_client.update_entity(issue_type, jira_key, payload)
+                except Exception as e_te:
+                    self.logger.warning(f"Failed to update Test Execution test cases: {e_te}")
+            
+            self.status_bar.showMessage(f"Saved online issue {jira_key}.")
+            
+            # 트리 새로고침 (선택 사항)
+            self.on_refresh_online_tree()
+            
+        except Exception as e:
+            self.status_bar.showMessage(f"Failed to save online issue {jira_key}: {e}")
+            self.logger.error(f"Failed to save online issue {jira_key}: {e}", exc_info=True)
         finally:
             QApplication.restoreOverrideCursor()
 
