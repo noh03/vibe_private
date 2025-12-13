@@ -1519,8 +1519,8 @@ class IssueTabWidget(QTabWidget):
                 summary=summary,
             )
             fields: Dict[str, Any] = {}
-            if ed_priority.text().strip():
-                fields["priority"] = ed_priority.text().strip()
+            if ed_priority.currentText().strip():
+                fields["priority"] = ed_priority.currentText().strip()
             if ed_assignee.text().strip():
                 fields["assignee"] = ed_assignee.text().strip()
             if fields:
@@ -3318,10 +3318,11 @@ class IssueTabWidget(QTabWidget):
                 self.ed_assignee.setText("")
                 self.ed_reporter.setText("")
                 self.ed_labels.setText("")
-                self.ed_components.setText("")
+                # QComboBox는 setCurrentText() 또는 setEditText() 사용 (setText() 아님)
+                self.ed_components.setEditText("")
                 self.ed_security_level.setText("")
-                self.ed_fix_versions.setText("")
-                self.ed_affects_versions.setText("")
+                self.ed_fix_versions.setEditText("")
+                self.ed_affects_versions.setEditText("")
                 self.ed_epic_link.setText("")
                 self.ed_sprint.setText("")
                 self.ed_rtm_env.setCurrentText("")
@@ -3355,10 +3356,11 @@ class IssueTabWidget(QTabWidget):
             self.ed_assignee.setText(issue.get("assignee") or "")
             self.ed_reporter.setText(issue.get("reporter") or "")
             self.ed_labels.setText(issue.get("labels") or "")
-            self.ed_components.setText(issue.get("components") or "")
+            # QComboBox는 setCurrentText() 또는 setEditText() 사용 (setText() 아님)
+            self.ed_components.setEditText(issue.get("components") or "")
             self.ed_security_level.setText(issue.get("security_level") or "")
-            self.ed_fix_versions.setText(issue.get("fix_versions") or "")
-            self.ed_affects_versions.setText(issue.get("affects_versions") or "")
+            self.ed_fix_versions.setEditText(issue.get("fix_versions") or "")
+            self.ed_affects_versions.setEditText(issue.get("affects_versions") or "")
             self.ed_epic_link.setText(issue.get("epic_link") or "")
             self.ed_sprint.setText(issue.get("sprint") or "")
             self.ed_rtm_env.setCurrentText(issue.get("rtm_environment") or "")
@@ -3464,16 +3466,18 @@ class IssueTabWidget(QTabWidget):
         """
         return {
             "summary": self.ed_summary.text().strip(),
-            "status": self.ed_status.text().strip(),
-            "priority": self.ed_priority.text().strip(),
+            # QComboBox는 currentText() 사용
+            "status": self.ed_status.currentText().strip(),
+            "priority": self.ed_priority.currentText().strip(),
             "assignee": self.ed_assignee.text().strip(),
             "reporter": self.ed_reporter.text().strip(),
             "labels": self.ed_labels.text().strip(),
-            "components": self.ed_components.text().strip(),
+            # QComboBox는 currentText() 사용
+            "components": self.ed_components.currentText().strip(),
             "security_level": self.ed_security_level.text().strip(),
-            "fix_versions": self.ed_fix_versions.text().strip(),
-            "affects_versions": self.ed_affects_versions.text().strip(),
-            "rtm_environment": self.ed_rtm_env.text().strip(),
+            "fix_versions": self.ed_fix_versions.currentText().strip(),
+            "affects_versions": self.ed_affects_versions.currentText().strip(),
+            "rtm_environment": self.ed_rtm_env.currentText().strip(),
             "due_date": self.ed_due_date.text().strip(),
             "attachments": self.ed_attachments.text().strip(),
             "description": self.txt_description.toPlainText().strip(),
