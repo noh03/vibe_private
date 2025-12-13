@@ -5469,6 +5469,7 @@ class MainWindow(QMainWindow):
         - 선택이 폴더면 해당 folder_id 하위에 생성.
         - 선택이 이슈면 그 이슈의 folder_id 하위에 생성.
         - 선택이 없으면 folder_id 없이 프로젝트 루트에 생성.
+        - CreateLocalIssueDialog를 사용하여 사용자 입력을 받아 상세 정보와 함께 생성.
         """
         if not self.project:
             self.status_bar.showMessage("No project loaded; cannot create issue.")
@@ -5494,11 +5495,63 @@ class MainWindow(QMainWindow):
                             if issue:
                                 folder_id = issue.get("folder_id")
 
-        summary = f"New {issue_type}"
-        new_id = create_local_issue(self.conn, self.project.id, issue_type=issue_type, folder_id=folder_id, summary=summary)
-        self.logger.info("Created new local issue id=%s, type=%s, folder_id=%s", new_id, issue_type, folder_id)
-        self.status_bar.showMessage(f"Created new local issue (type={issue_type}).")
-        self.reload_local_tree()
+        # CreateLocalIssueDialog 표시
+        from rtm_local_manager.gui.create_local_issue_dialog import CreateLocalIssueDialog
+        
+        dialog = CreateLocalIssueDialog(
+            issue_type=issue_type,
+            project_id=self.project.id,
+            folder_id=folder_id,
+            conn=self.conn,
+            parent=self
+        )
+        
+        if dialog.exec() == QDialog.Accepted:
+            created_issue_id = dialog.created_issue_id
+            if created_issue_id:
+                self.logger.info("Created new local issue id=%s, type=%s, folder_id=%s", created_issue_id, issue_type, folder_id)
+                self.status_bar.showMessage(f"Created new local issue (type={issue_type}, id={created_issue_id}).")
+                self.reload_local_tree()
+                
+                # 생성된 이슈를 트리에서 선택
+                self._select_issue_in_local_tree_by_id(created_issue_id)
+            else:
+                self.status_bar.showMessage("Issue was created but ID could not be determined.")
+    
+    def _select_issue_in_local_tree_by_id(self, issue_id: int):
+        """
+        로컬 트리에서 지정된 issue_id를 가진 이슈를 찾아서 선택한다.
+        """
+        model = self.left_panel.tree_view.model()
+        if not model:
+            return
+        
+        # 트리 전체를 순회하여 issue_id와 일치하는 항목 찾기
+        def find_item(parent_item, target_id):
+            for i in range(parent_item.rowCount()):
+                child = parent_item.child(i)
+                if not child:
+                    continue
+                node_type = child.data(Qt.UserRole)
+                if node_type == "ISSUE":
+                    child_issue_id = child.data(Qt.UserRole + 1)
+                    if child_issue_id and int(child_issue_id) == target_id:
+                        return child
+                # 재귀적으로 하위 항목 검색
+                found = find_item(child, target_id)
+                if found:
+                    return found
+            return None
+        
+        root = model.invisibleRootItem()
+        found_item = find_item(root, issue_id)
+        if found_item:
+            index = model.indexFromItem(found_item)
+            if index.isValid():
+                self.left_panel.tree_view.setCurrentIndex(index)
+                self.left_panel.tree_view.scrollTo(index)
+                # 선택 이벤트 트리거
+                self.left_panel.tree_view.selectionModel().select(index, QItemSelectionModel.Select)
 
     def on_delete_local_issue_clicked(self):
         """
