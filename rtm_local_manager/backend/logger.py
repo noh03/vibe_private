@@ -17,7 +17,10 @@ def _init_root_logger() -> None:
     if _LOGGER_INITIALIZED:
         return
 
-    log_level = os.environ.get("RTM_LOG_LEVEL", "INFO").upper()
+    # 기본값을 DEBUG 으로 두어, 별도 환경 변수 없이도 상세 로그(특히 JIRA 요청/응답)를
+    # 콘솔에서 바로 확인할 수 있게 한다.
+    # 필요 시 사용자가 RTM_LOG_LEVEL=INFO 등으로 다시 줄여서 실행 가능.
+    log_level = os.environ.get("RTM_LOG_LEVEL", "DEBUG").upper()
     numeric_level = getattr(logging, log_level, logging.INFO)
 
     logger = logging.getLogger("rtm")
